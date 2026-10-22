@@ -1,4 +1,4 @@
-# swpr-budget-mod
+# swpr-budget
 
 Budget modification request tool for Regional Strong Workforce.
 
