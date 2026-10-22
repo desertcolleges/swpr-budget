@@ -458,7 +458,7 @@ function showModificationView() {
   state.isNewBudget = false;
   document.getElementById('newProjectControls').classList.add('hidden');
   document.getElementById('modificationSubheading').textContent =
-    'The final proposed total must match the current total for this round.';
+    'The final proposed total must equal the allocation for this round.';
   const roundRows = getRowsForRound(state.selectedRound);
 
   if (!roundRows.length) {
@@ -466,10 +466,15 @@ function showModificationView() {
     return;
   }
 
-  state.baselineCurrentTotal = roundRows.reduce(
-    (sum, row) => sum + toNumber(row.budget),
-    0
-  );
+  if (!(state.allocations[state.selectedRound] > 0)) {
+    showMessage(
+      `No ${state.selectedRound} allocation is set for this institution. Contact an administrator.`,
+      'error'
+    );
+    return;
+  }
+
+  state.baselineCurrentTotal = state.allocations[state.selectedRound];
 
   state.approvedActivitiesByProject = buildApprovedActivities(roundRows);
   state.modificationProjects = buildModificationProjects(roundRows);
@@ -488,6 +493,15 @@ function showModificationView() {
 
 function startNewBudget(round) {
   clearMessage();
+
+  if (!(state.allocations[round] > 0)) {
+    showMessage(
+      `No ${round} allocation is set for this institution. Contact an administrator.`,
+      'error'
+    );
+    return;
+  }
+
   state.selectedRound = round;
   state.isNewBudget = true;
   state.modificationProjects = [];
@@ -945,9 +959,7 @@ function updateModificationTotals() {
   );
 
   const difference = proposedTotal - currentTotal;
-  const valid = state.isNewBudget && currentTotal <= 0
-    ? proposedTotal > 0
-    : Math.abs(difference) < 0.005;
+  const valid = currentTotal > 0 && Math.abs(difference) < 0.005;
 
   document.getElementById('currentTotal').textContent =
     formatCurrency(currentTotal);
@@ -1109,14 +1121,11 @@ function validateModifications(flattened) {
     0
   );
 
-  if (
-    (!state.isNewBudget || state.baselineCurrentTotal > 0) &&
-    Math.abs(proposedTotal - state.baselineCurrentTotal) >= 0.005
-  ) {
+  if (!(state.baselineCurrentTotal > 0)) {
+    errors.push(`No ${state.selectedRound} allocation is set for this institution.`);
+  } else if (Math.abs(proposedTotal - state.baselineCurrentTotal) >= 0.005) {
     errors.push(
-      state.isNewBudget
-        ? 'The proposed budget must equal your Round 11 allocation.'
-        : 'The proposed budget must equal the current round budget total.'
+      `The proposed budget must equal the ${state.selectedRound} allocation.`
     );
   }
 
