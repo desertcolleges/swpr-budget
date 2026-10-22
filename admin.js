@@ -27,6 +27,7 @@ const state = {
   extraRounds: [],
   allocations: [],
   institutions: [],
+  institutionRows: [],
   activities: []
 };
 
@@ -61,6 +62,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('addRoundForm').addEventListener('submit', addRound);
   document.getElementById('allocationForm').addEventListener('submit', saveAllocation);
+  document.getElementById('institutionForm').addEventListener('submit', addInstitution);
+  document.getElementById('institutionList').addEventListener('click', handleInstitutionClick);
   document.getElementById('activityForm').addEventListener('submit', addActivity);
   document.getElementById('allocationList').addEventListener('click', handleAllocationClick);
   document.getElementById('activityList').addEventListener('click', handleActivityClick);
@@ -706,7 +709,10 @@ function addRound(event) {
 async function loadAllocations() {
   try {
     const [instResult, allocResult] = await Promise.all([
-      supabaseClient.rpc('get_public_institutions'),
+      supabaseClient
+        .from('institutions')
+        .select('id, name, is_active')
+        .order('name'),
       supabaseClient
         .from('college_allocations')
         .select('id, institution, round, allocation_amount')
@@ -716,7 +722,10 @@ async function loadAllocations() {
     if (instResult.error) throw instResult.error;
     if (allocResult.error) throw allocResult.error;
 
-    state.institutions = (instResult.data || []).map(row => row.institution);
+    state.institutionRows = instResult.data || [];
+    state.institutions = state.institutionRows
+      .filter(row => row.is_active)
+      .map(row => row.name);
     state.allocations = (allocResult.data || []).map(row => ({
       ...row,
       round: inferRound(row.round) || row.round
@@ -725,6 +734,7 @@ async function loadAllocations() {
     renderRoundSettings();
     renderAllocationForm();
     renderAllocations();
+    renderInstitutions();
   } catch (error) {
     showMessage(
       'Unable to load allocations: ' + error.message + ' (apply DATABASE_SETUP.sql)',
@@ -844,6 +854,98 @@ async function handleAllocationClick(event) {
     await loadAllocations();
   } catch (error) {
     showMessage('Unable to delete allocation: ' + error.message, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+function renderInstitutions() {
+  const container = document.getElementById('institutionList');
+
+  if (!state.institutionRows.length) {
+    container.innerHTML = '<p>No institutions.</p>';
+    return;
+  }
+
+  container.innerHTML = `
+    <table>
+      <thead><tr><th>Institution</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        ${state.institutionRows.map(row => `
+          <tr>
+            <td>${escapeHtml(row.name)}</td>
+            <td>${row.is_active ? 'Active' : 'Inactive'}</td>
+            <td>
+              <button class="button secondary small-button" type="button" data-action="rename-institution" data-id="${escapeAttribute(row.id)}">Rename</button>
+              <button class="button secondary small-button" type="button" data-action="toggle-institution" data-id="${escapeAttribute(row.id)}">${row.is_active ? 'Deactivate' : 'Activate'}</button>
+              <button class="button danger small-button" type="button" data-action="delete-institution" data-id="${escapeAttribute(row.id)}">Delete</button>
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+async function addInstitution(event) {
+  event.preventDefault();
+  const input = document.getElementById('institutionName');
+  const name = input.value.trim();
+  if (!name) return;
+
+  try {
+    showLoading(true);
+    const { error } = await supabaseClient.from('institutions').insert({ name });
+    if (error) throw error;
+    input.value = '';
+    showMessage('Institution added.', 'success');
+    await loadAllocations();
+  } catch (error) {
+    showMessage('Unable to add institution: ' + error.message, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function handleInstitutionClick(event) {
+  const button = event.target.closest('[data-action]');
+  if (!button) return;
+
+  const row = state.institutionRows.find(r => String(r.id) === button.dataset.id);
+  if (!row) return;
+
+  try {
+    if (button.dataset.action === 'rename-institution') {
+      const newName = (prompt('New institution name:', row.name) || '').trim();
+      if (!newName || newName === row.name) return;
+      showLoading(true);
+      const { error } = await supabaseClient.rpc('rename_institution', {
+        p_id: row.id,
+        p_new_name: newName
+      });
+      if (error) throw error;
+    } else if (button.dataset.action === 'toggle-institution') {
+      showLoading(true);
+      const { error } = await supabaseClient
+        .from('institutions')
+        .update({ is_active: !row.is_active })
+        .eq('id', row.id);
+      if (error) throw error;
+    } else if (button.dataset.action === 'delete-institution') {
+      const used = state.allocations.some(a => a.institution === row.name);
+      if (used) {
+        showMessage('Remove this institution\'s allocations first, or deactivate it instead.', 'error');
+        return;
+      }
+      if (!confirm(`Delete ${row.name}? Past requests keep their institution name.`)) return;
+      showLoading(true);
+      const { error } = await supabaseClient
+        .from('institutions')
+        .delete()
+        .eq('id', row.id);
+      if (error) throw error;
+    }
+    await loadAllocations();
+  } catch (error) {
+    showMessage('Unable to update institution: ' + error.message, 'error');
   } finally {
     showLoading(false);
   }

@@ -19,9 +19,9 @@
             <h1>IEDRC Budget Administration</h1>
             <p>Review requests, configure visible rounds, and manage workflow settings.</p>
             <p class="header-links">
-              <a href="/swpr-budget-mod/index.html">Requester Form</a>
+              <a href="index.html">Requester Form</a>
               <span>•</span>
-              <a href="/swpr-budget-mod/status.html">Status Portal</a>
+              <a href="status.html">Status Portal</a>
             </p>
           </div>
         </div>
@@ -67,6 +67,18 @@
             </div>
             <button class="button secondary" type="submit">Add Round</button>
           </form>
+        </div>
+
+        <div class="card" id="institutionCard">
+          <h3>Institutions</h3>
+          <form id="institutionForm" class="activity-controls">
+            <div>
+              <label for="institutionName">Institution name</label>
+              <input id="institutionName" type="text" required />
+            </div>
+            <button class="button primary" type="submit">Add Institution</button>
+          </form>
+          <div id="institutionList" class="table-wrapper"></div>
         </div>
 
         <div class="card" id="allocationCard">

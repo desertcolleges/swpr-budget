@@ -236,3 +236,97 @@ with check (
     where a.user_id = auth.uid() and a.active = true
   )
 );
+
+-- Editable institution list.
+create table if not exists public.institutions (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+-- One-time seed from the pre-existing get_public_institutions() function.
+do $$
+begin
+  if not exists (select 1 from public.institutions) then
+    begin
+      insert into public.institutions (name)
+      select distinct institution from public.get_public_institutions()
+      where institution is not null
+      on conflict do nothing;
+    exception when others then
+      insert into public.institutions (name)
+      select distinct institution from public.college_allocations
+      on conflict do nothing;
+    end;
+  end if;
+end $$;
+
+alter table public.institutions enable row level security;
+
+DROP POLICY IF EXISTS "Public can read active institutions" ON public.institutions;
+create policy "Public can read active institutions"
+on public.institutions
+for select
+to anon, authenticated
+using (is_active = true);
+
+DROP POLICY IF EXISTS "Active admins can manage institutions" ON public.institutions;
+create policy "Active admins can manage institutions"
+on public.institutions
+for all
+to authenticated
+using (
+  exists (
+    select 1 from public.admin_users a
+    where a.user_id = auth.uid() and a.active = true
+  )
+)
+with check (
+  exists (
+    select 1 from public.admin_users a
+    where a.user_id = auth.uid() and a.active = true
+  )
+);
+
+-- Requester/admin dropdown source (now backed by the institutions table).
+create or replace function public.get_public_institutions()
+returns table (institution text)
+language sql
+security definer
+set search_path = public
+as $$
+  select name from public.institutions where is_active order by name;
+$$;
+
+grant execute on function public.get_public_institutions() to anon, authenticated;
+
+-- Rename an institution and keep existing records in sync.
+create or replace function public.rename_institution(p_id uuid, p_new_name text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_old text;
+begin
+  if not exists (
+    select 1 from public.admin_users a
+    where a.user_id = auth.uid() and a.active = true
+  ) then
+    raise exception 'Not authorized';
+  end if;
+
+  select name into v_old from public.institutions where id = p_id;
+  if v_old is null then
+    raise exception 'Institution not found';
+  end if;
+
+  update public.institutions set name = btrim(p_new_name) where id = p_id;
+  update public.college_allocations set institution = btrim(p_new_name) where institution = v_old;
+  update public.budget_submissions set institution = btrim(p_new_name) where institution = v_old;
+end;
+$$;
+
+grant execute on function public.rename_institution(uuid, text) to authenticated;
