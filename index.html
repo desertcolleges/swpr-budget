@@ -33,7 +33,6 @@
           <option value="">Loading institutions...</option>
         </select>
         <button id="loadBudgetButton" class="button primary">Load Institution Budget</button>
-        <button id="newBudgetButton" class="button secondary">Create New Round 11 Budget</button>
       </section>
 
       <div id="messageArea"></div>
@@ -108,7 +107,8 @@
 
         <div id="newProjectControls" class="card hidden">
           <label for="newProjectName">Add Project</label>
-          <input id="newProjectName" type="text" placeholder="Project name" />
+          <input id="newProjectName" type="text" list="projectOptions" placeholder="Select or type project name" />
+          <datalist id="projectOptions"></datalist>
           <button id="addProjectButton" class="button primary small-button" type="button">+ Add Project</button>
         </div>
 

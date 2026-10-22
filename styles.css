@@ -377,7 +377,34 @@ tr:last-child td {
 
 .activity-table {
   width: 100%;
-  min-width: 920px;
+  min-width: 760px;
+  table-layout: fixed;
+}
+
+.activity-table .col-category { width: 9%; }
+.activity-table .col-current { width: 11%; }
+.activity-table .col-current-desc { width: 16%; }
+.activity-table .col-proposed { width: 20%; }
+.activity-table .col-proposed-desc { width: 44%; }
+
+.activity-table .current-cell {
+  font-size: 0.85rem;
+  color: #5b6770;
+  word-break: break-word;
+}
+
+.activity-table .amount-input {
+  min-width: 0;
+  width: 100%;
+}
+
+.activity-table textarea {
+  width: 100%;
+}
+
+.hint {
+  font-size: 0.9rem;
+  color: #5b6770;
 }
 
 .activity-controls {
