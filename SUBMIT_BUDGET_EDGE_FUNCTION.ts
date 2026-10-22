@@ -288,7 +288,8 @@ async function sendEmails(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `******      },
+        Authorization: `Bearer ${resendApiKey}`
+      },
       body: JSON.stringify({
         from: "noreply@desertcolleges.org",
         to: adminEmail.trim(),
@@ -308,7 +309,8 @@ async function sendEmails(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `******        },
+          Authorization: `Bearer ${resendApiKey}`
+        },
         body: JSON.stringify({
           from: "noreply@desertcolleges.org",
           to: requesterEmail.trim(),
