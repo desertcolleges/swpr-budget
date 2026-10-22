@@ -7,6 +7,7 @@ const supabaseClient = window.supabase.createClient(
 );
 
 const DEFAULT_VISIBLE_ROUNDS = ['R10'];
+const NEW_BUDGET_ROUND = 'R11';
 const OBJECT_CATEGORIES = ['1000s', '2000s', '3000s', '4000s', '5000s', '6000s'];
 
 const state = {
@@ -17,7 +18,8 @@ const state = {
   selectedRound: '',
   modificationProjects: [],
   approvedActivitiesByProject: {},
-  baselineCurrentTotal: 0
+  baselineCurrentTotal: 0,
+  isNewBudget: false
 };
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
@@ -31,6 +33,14 @@ document.addEventListener('DOMContentLoaded', () => {
     .addEventListener('click', loadSelectedInstitution);
 
   document
+    .getElementById('newBudgetButton')
+    .addEventListener('click', startNewBudget);
+
+  document
+    .getElementById('addProjectButton')
+    .addEventListener('click', addProject);
+
+  document
     .getElementById('backToRoundsButton')
     .addEventListener('click', showRoundSelection);
 
@@ -40,7 +50,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document
     .getElementById('cancelModificationButton')
-    .addEventListener('click', showRoundDetailView);
+    .addEventListener('click', () => {
+      if (state.isNewBudget) {
+        state.isNewBudget = false;
+        state.modificationProjects = [];
+        hideSections();
+        return;
+      }
+      showRoundDetailView();
+    });
 
   document
     .getElementById('continueToRequesterInfoButton')
@@ -376,6 +394,10 @@ function renderBudgetTableForRound(round) {
 }
 
 function showModificationView() {
+  state.isNewBudget = false;
+  document.getElementById('newProjectControls').classList.add('hidden');
+  document.getElementById('modificationSubheading').textContent =
+    'The final proposed total must match the current total for this round.';
   const roundRows = getRowsForRound(state.selectedRound);
 
   if (!roundRows.length) {
@@ -401,6 +423,78 @@ function showModificationView() {
 
   renderModificationProjects();
   updateModificationTotals();
+}
+
+async function startNewBudget() {
+  const institution = document.getElementById('institutionSelect').value;
+
+  if (!institution) {
+    showMessage('Please select an institution.', 'error');
+    return;
+  }
+
+  clearMessage();
+  state.institution = institution;
+  state.selectedRound = NEW_BUDGET_ROUND;
+  state.isNewBudget = true;
+  state.modificationProjects = [];
+  state.approvedActivitiesByProject = {};
+  state.baselineCurrentTotal = 0;
+
+  try {
+    showLoading(true);
+
+    // Round 11 allocation for the college; optional table, budget is open-ended if absent.
+    const { data, error } = await supabaseClient
+      .from('round_allocations')
+      .select('*')
+      .eq('institution', institution)
+      .eq('round', NEW_BUDGET_ROUND)
+      .maybeSingle();
+
+    const allocation = error || !data
+      ? 0
+      : toNumber(data.allocation ?? data.allocation_amount ?? data.amount);
+
+    state.baselineCurrentTotal = allocation;
+  } catch (error) {
+    state.baselineCurrentTotal = 0;
+  } finally {
+    showLoading(false);
+  }
+
+  hideSections();
+  document.getElementById('modificationSection').classList.remove('hidden');
+  document.getElementById('newProjectControls').classList.remove('hidden');
+  document.getElementById('modificationHeading').textContent =
+    `${institution} • Build New ${NEW_BUDGET_ROUND} Budget`;
+  document.getElementById('modificationSubheading').textContent =
+    state.baselineCurrentTotal > 0
+      ? 'Add projects and activities. The proposed total must equal your Round 11 allocation.'
+      : 'Add projects and activities to build your Round 11 budget.';
+
+  renderModificationProjects();
+  updateModificationTotals();
+}
+
+function addProject() {
+  const input = document.getElementById('newProjectName');
+  const name = input.value.trim();
+
+  if (!name) {
+    showMessage('Enter a project name.', 'error');
+    return;
+  }
+
+  if (state.modificationProjects.some(p => p.name.toLowerCase() === name.toLowerCase())) {
+    showMessage(`Project ${name} already exists.`, 'error');
+    return;
+  }
+
+  clearMessage();
+  state.modificationProjects.push({ name, activities: [] });
+  input.value = '';
+  renderModificationProjects();
 }
 
 function buildApprovedActivities(roundRows) {
@@ -546,10 +640,12 @@ function renderModificationProjects() {
           ${activitiesHtml}
           <div class="activity-controls">
             <label for="add-activity-${projectIndex}">Add New Activity</label>
-            <select id="add-activity-${projectIndex}" data-project-index="${projectIndex}" data-action="activity-select">
+            ${state.isNewBudget
+              ? `<input id="add-activity-${projectIndex}" type="text" data-project-index="${projectIndex}" data-action="activity-select" placeholder="Activity name" />`
+              : `<select id="add-activity-${projectIndex}" data-project-index="${projectIndex}" data-action="activity-select">
               <option value="">Select an activity</option>
               ${addableActivities.map(activity => `<option value="${escapeAttribute(activity)}">${escapeHtml(activity)}</option>`).join('')}
-            </select>
+            </select>`}
             <button class="button primary small-button" type="button" data-project-index="${projectIndex}" data-action="add-activity">+ Add New Activity</button>
           </div>
         </div>
@@ -777,7 +873,9 @@ function updateModificationTotals() {
   );
 
   const difference = proposedTotal - currentTotal;
-  const valid = Math.abs(difference) < 0.005;
+  const valid = state.isNewBudget && currentTotal <= 0
+    ? proposedTotal > 0
+    : Math.abs(difference) < 0.005;
 
   document.getElementById('currentTotal').textContent =
     formatCurrency(currentTotal);
@@ -866,7 +964,12 @@ async function submitModification(event) {
     );
 
     state.modificationProjects = [];
-    showRoundDetailView();
+    if (state.isNewBudget) {
+      state.isNewBudget = false;
+      hideSections();
+    } else {
+      showRoundDetailView();
+    }
   } catch (error) {
     showMessage(
       'Unable to submit request: ' + error.message,
@@ -881,7 +984,9 @@ function validateModifications(flattened) {
   const errors = [];
 
   if (!hasMeaningfulChanges()) {
-    errors.push('At least one budget line must be modified before submission.');
+    errors.push(state.isNewBudget
+      ? 'Add at least one budgeted line before submission.'
+      : 'At least one budget line must be modified before submission.');
     return errors;
   }
 
@@ -932,9 +1037,14 @@ function validateModifications(flattened) {
     0
   );
 
-  if (Math.abs(proposedTotal - state.baselineCurrentTotal) >= 0.005) {
+  if (
+    (!state.isNewBudget || state.baselineCurrentTotal > 0) &&
+    Math.abs(proposedTotal - state.baselineCurrentTotal) >= 0.005
+  ) {
     errors.push(
-      'The proposed budget must equal the current round budget total.'
+      state.isNewBudget
+        ? 'The proposed budget must equal your Round 11 allocation.'
+        : 'The proposed budget must equal the current round budget total.'
     );
   }
 

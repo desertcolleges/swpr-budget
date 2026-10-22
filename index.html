@@ -12,7 +12,7 @@
         <div class="brand-lockup">
           <img
             class="brand-logo"
-            src="images/iedrc-logo.svg"
+            src="images/iedrc-logo.png"
             alt="IEDRC logo"
           />
           <div>
@@ -33,6 +33,7 @@
           <option value="">Loading institutions...</option>
         </select>
         <button id="loadBudgetButton" class="button primary">Load Institution Budget</button>
+        <button id="newBudgetButton" class="button secondary">Create New Round 11 Budget</button>
       </section>
 
       <div id="messageArea"></div>
@@ -81,7 +82,7 @@
         <div class="section-header">
           <div>
             <h2 id="modificationHeading">Submit Budget Modification</h2>
-            <p>The final proposed total must match the current total for this round.</p>
+            <p id="modificationSubheading">The final proposed total must match the current total for this round.</p>
           </div>
           <div class="button-row">
             <button id="cancelModificationButton" class="button secondary">Cancel</button>
@@ -104,6 +105,12 @@
         </div>
 
         <div id="modificationRows"></div>
+
+        <div id="newProjectControls" class="card hidden">
+          <label for="newProjectName">Add Project</label>
+          <input id="newProjectName" type="text" placeholder="Project name" />
+          <button id="addProjectButton" class="button primary small-button" type="button">+ Add Project</button>
+        </div>
 
         <div class="button-row">
           <button
