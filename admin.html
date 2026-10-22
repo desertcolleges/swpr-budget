@@ -12,7 +12,7 @@
         <div class="brand-lockup">
           <img
             class="brand-logo"
-            src="images/iedrc-logo.svg"
+            src="images/iedrc-logo.png"
             alt="IEDRC logo"
           />
           <div>
@@ -58,11 +58,54 @@
           </form>
         </div>
 
+        <div class="card">
+          <h3>Add Round</h3>
+          <form id="addRoundForm" class="activity-controls">
+            <div>
+              <label for="newRoundNumber">Round number</label>
+              <input id="newRoundNumber" type="number" min="1" step="1" required />
+            </div>
+            <button class="button secondary" type="submit">Add Round</button>
+          </form>
+        </div>
+
+        <div class="card" id="allocationCard">
+          <h3>College Allocations</h3>
+          <form id="allocationForm" class="activity-controls">
+            <div>
+              <label for="allocationInstitution">College</label>
+              <select id="allocationInstitution" required></select>
+            </div>
+            <div>
+              <label for="allocationRound">Round</label>
+              <select id="allocationRound" required></select>
+            </div>
+            <div>
+              <label for="allocationAmount">Allocation ($)</label>
+              <input id="allocationAmount" type="number" min="0" step="1" required />
+            </div>
+            <button class="button primary" type="submit">Save Allocation</button>
+          </form>
+          <div id="allocationList" class="table-wrapper"></div>
+        </div>
+
         <div class="card" id="activityManagementCard">
-          <h3>Activity Management (Placeholder)</h3>
+          <h3>Activity Management</h3>
           <p id="activityManagementPlaceholderText">
-            Future module: define and manage approved project activities and mappings.
+            Define approved activities requesters can add. Leave project blank to make an activity available to all projects.
           </p>
+          <form id="activityForm" class="activity-controls">
+            <div>
+              <label for="activityProject">Project (optional)</label>
+              <input id="activityProject" type="text" />
+            </div>
+            <div>
+              <label for="activityName">Activity name</label>
+              <input id="activityName" type="text" required />
+            </div>
+            <button class="button primary" type="submit">Add Activity</button>
+          </form>
+          <div id="activityList" class="table-wrapper"></div>
         </div>
 
         <div class="card">

@@ -191,3 +191,48 @@ $$;
 
 revoke all on function public.get_request_status(text) from public;
 grant execute on function public.get_request_status(text) to anon, authenticated;
+
+-- Requesters read active approved activities.
+DROP POLICY IF EXISTS "Public can read active activities" ON public.activity_management;
+create policy "Public can read active activities"
+on public.activity_management
+for select
+to anon, authenticated
+using (is_active = true);
+
+-- Per-college round allocations.
+create table if not exists public.college_allocations (
+  id uuid primary key default gen_random_uuid(),
+  institution text not null,
+  round text not null,
+  allocation_amount numeric not null default 0,
+  updated_at timestamptz not null default now(),
+  unique (institution, round)
+);
+
+alter table public.college_allocations enable row level security;
+
+DROP POLICY IF EXISTS "Public can read allocations" ON public.college_allocations;
+create policy "Public can read allocations"
+on public.college_allocations
+for select
+to anon, authenticated
+using (true);
+
+DROP POLICY IF EXISTS "Active admins can manage allocations" ON public.college_allocations;
+create policy "Active admins can manage allocations"
+on public.college_allocations
+for all
+to authenticated
+using (
+  exists (
+    select 1 from public.admin_users a
+    where a.user_id = auth.uid() and a.active = true
+  )
+)
+with check (
+  exists (
+    select 1 from public.admin_users a
+    where a.user_id = auth.uid() and a.active = true
+  )
+);

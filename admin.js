@@ -9,12 +9,25 @@ const supabaseClient = window.supabase.createClient(
   SUPABASE_ANON_KEY
 );
 
-const ALL_ROUNDS = Array.from({ length: 12 }, (_, index) => `R${index + 1}`);
+const BASE_ROUNDS = Array.from({ length: 12 }, (_, index) => `R${index + 1}`);
+
+function getAllRounds() {
+  return Array.from(new Set([
+    ...BASE_ROUNDS,
+    ...state.extraRounds,
+    ...state.visibleRounds,
+    ...state.allocations.map(row => row.round)
+  ])).sort(sortRound);
+}
 
 const state = {
   requests: [],
   selectedRequest: null,
-  visibleRounds: ['R10']
+  visibleRounds: ['R10'],
+  extraRounds: [],
+  allocations: [],
+  institutions: [],
+  activities: []
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -45,6 +58,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   document
     .getElementById('roundSettingsForm')
     .addEventListener('submit', saveRoundSettings);
+
+  document.getElementById('addRoundForm').addEventListener('submit', addRound);
+  document.getElementById('allocationForm').addEventListener('submit', saveAllocation);
+  document.getElementById('activityForm').addEventListener('submit', addActivity);
+  document.getElementById('allocationList').addEventListener('click', handleAllocationClick);
+  document.getElementById('activityList').addEventListener('click', handleActivityClick);
 
   renderRoundSettings();
   await loadExistingSession();
@@ -150,7 +169,8 @@ async function showAdminDashboard(session) {
   await Promise.all([
     loadRequests(),
     loadRoundSettings(),
-    loadActivityManagementPlaceholder()
+    loadActivityManagement(),
+    loadAllocations()
   ]);
 }
 
@@ -601,7 +621,7 @@ async function loadRoundSettings() {
 function renderRoundSettings() {
   const grid = document.getElementById('roundSettingsGrid');
 
-  grid.innerHTML = ALL_ROUNDS.map(round => {
+  grid.innerHTML = getAllRounds().map(round => {
     const checked = state.visibleRounds.includes(round)
       ? 'checked'
       : '';
@@ -660,38 +680,277 @@ async function saveRoundSettings(event) {
   }
 }
 
-async function loadActivityManagementPlaceholder() {
-  const placeholder = document.getElementById(
-    'activityManagementPlaceholderText'
+function addRound(event) {
+  event.preventDefault();
+  const input = document.getElementById('newRoundNumber');
+  const number = Math.round(Number(input.value));
+
+  if (!number || number < 1) {
+    showMessage('Enter a valid round number.', 'error');
+    return;
+  }
+
+  const round = `R${number}`;
+  if (!state.extraRounds.includes(round)) state.extraRounds.push(round);
+
+  // Preserve current checkbox selections while re-rendering.
+  state.visibleRounds = Array.from(
+    document.querySelectorAll('#roundSettingsGrid input:checked')
+  ).map(i => i.value);
+  renderRoundSettings();
+  renderAllocationForm();
+  input.value = '';
+  showMessage(`${round} added. Select it and save round settings to make it visible.`, 'success');
+}
+
+async function loadAllocations() {
+  try {
+    const [instResult, allocResult] = await Promise.all([
+      supabaseClient.rpc('get_public_institutions'),
+      supabaseClient
+        .from('college_allocations')
+        .select('id, institution, round, allocation_amount')
+        .order('institution')
+    ]);
+
+    if (instResult.error) throw instResult.error;
+    if (allocResult.error) throw allocResult.error;
+
+    state.institutions = (instResult.data || []).map(row => row.institution);
+    state.allocations = (allocResult.data || []).map(row => ({
+      ...row,
+      round: inferRound(row.round) || row.round
+    }));
+
+    renderRoundSettings();
+    renderAllocationForm();
+    renderAllocations();
+  } catch (error) {
+    showMessage(
+      'Unable to load allocations: ' + error.message + ' (apply DATABASE_SETUP.sql)',
+      'error'
+    );
+  }
+}
+
+function renderAllocationForm() {
+  const instSelect = document.getElementById('allocationInstitution');
+  const roundSelect = document.getElementById('allocationRound');
+  const instValue = instSelect.value;
+  const roundValue = roundSelect.value;
+
+  instSelect.innerHTML = state.institutions
+    .map(name => `<option value="${escapeAttribute(name)}">${escapeHtml(name)}</option>`)
+    .join('');
+  roundSelect.innerHTML = getAllRounds()
+    .map(round => `<option value="${round}">${round}</option>`)
+    .join('');
+
+  if (instValue) instSelect.value = instValue;
+  roundSelect.value = roundValue || 'R11';
+}
+
+function renderAllocations() {
+  const container = document.getElementById('allocationList');
+
+  if (!state.allocations.length) {
+    container.innerHTML = '<p>No allocations set.</p>';
+    return;
+  }
+
+  const rows = [...state.allocations].sort((a, b) =>
+    a.institution.localeCompare(b.institution) || sortRound(a.round, b.round)
   );
 
+  container.innerHTML = `
+    <table>
+      <thead><tr><th>College</th><th>Round</th><th class="money">Allocation</th><th></th></tr></thead>
+      <tbody>
+        ${rows.map(row => `
+          <tr>
+            <td>${escapeHtml(row.institution)}</td>
+            <td>${escapeHtml(row.round)}</td>
+            <td class="money">${formatCurrency(row.allocation_amount)}</td>
+            <td>
+              <button class="button secondary small-button" type="button" data-action="edit-allocation" data-id="${escapeAttribute(row.id)}">Edit</button>
+              <button class="button danger small-button" type="button" data-action="delete-allocation" data-id="${escapeAttribute(row.id)}">Delete</button>
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+async function saveAllocation(event) {
+  event.preventDefault();
+
+  const institution = document.getElementById('allocationInstitution').value;
+  const round = document.getElementById('allocationRound').value;
+  const amount = Math.round(Number(document.getElementById('allocationAmount').value));
+
+  if (!institution || !round || !Number.isFinite(amount) || amount < 0) {
+    showMessage('Select a college and round and enter a valid amount.', 'error');
+    return;
+  }
+
   try {
-    const { count, error } = await supabaseClient
-      .from('activity_management')
-      .select('id', { count: 'exact', head: true });
+    showLoading(true);
+    const { error } = await supabaseClient
+      .from('college_allocations')
+      .upsert(
+        {
+          institution,
+          round,
+          allocation_amount: amount,
+          updated_at: new Date().toISOString()
+        },
+        { onConflict: 'institution,round' }
+      );
 
     if (error) throw error;
 
-    placeholder.textContent =
-      `Future module ready. Placeholder table detected with ${count || 0} activity records.`;
+    showMessage('Allocation saved.', 'success');
+    await loadAllocations();
   } catch (error) {
-    const message = String(error?.message || '');
-    const missingTable =
-      error?.code === '42P01' ||
-      message.toLowerCase().includes('does not exist');
+    showMessage('Unable to save allocation: ' + error.message, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
 
-    if (missingTable) {
-      placeholder.textContent =
-        'Future module: table not available yet in this environment. Apply DATABASE_SETUP.sql to enable it.';
-      return;
-    }
+async function handleAllocationClick(event) {
+  const button = event.target.closest('[data-action]');
+  if (!button) return;
 
-    placeholder.textContent =
-      'Future module: setup exists but could not be loaded. Verify activity_management policies.';
+  const row = state.allocations.find(r => String(r.id) === button.dataset.id);
+  if (!row) return;
+
+  if (button.dataset.action === 'edit-allocation') {
+    document.getElementById('allocationInstitution').value = row.institution;
+    document.getElementById('allocationRound').value = row.round;
+    document.getElementById('allocationAmount').value = Math.round(Number(row.allocation_amount));
+    return;
+  }
+
+  if (!confirm(`Delete ${row.round} allocation for ${row.institution}?`)) return;
+
+  try {
+    showLoading(true);
+    const { error } = await supabaseClient
+      .from('college_allocations')
+      .delete()
+      .eq('id', row.id);
+
+    if (error) throw error;
+    await loadAllocations();
+  } catch (error) {
+    showMessage('Unable to delete allocation: ' + error.message, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function loadActivityManagement() {
+  try {
+    const { data, error } = await supabaseClient
+      .from('activity_management')
+      .select('id, project_title, activity_name, is_active')
+      .order('project_title')
+      .order('activity_name');
+
+    if (error) throw error;
+
+    state.activities = data || [];
+    renderActivities();
+  } catch (error) {
     showMessage(
-      'Unable to load activity management summary: ' + message,
+      'Unable to load activity management: ' + String(error?.message || '') + ' (apply DATABASE_SETUP.sql)',
       'error'
     );
+  }
+}
+
+function renderActivities() {
+  const container = document.getElementById('activityList');
+
+  if (!state.activities.length) {
+    container.innerHTML = '<p>No activities set up yet.</p>';
+    return;
+  }
+
+  container.innerHTML = `
+    <table>
+      <thead><tr><th>Project</th><th>Activity</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        ${state.activities.map(row => `
+          <tr>
+            <td>${escapeHtml(row.project_title || 'All projects')}</td>
+            <td>${escapeHtml(row.activity_name)}</td>
+            <td>${row.is_active ? 'Active' : 'Inactive'}</td>
+            <td>
+              <button class="button secondary small-button" type="button" data-action="toggle-activity" data-id="${escapeAttribute(row.id)}">${row.is_active ? 'Deactivate' : 'Activate'}</button>
+              <button class="button danger small-button" type="button" data-action="delete-activity" data-id="${escapeAttribute(row.id)}">Delete</button>
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+async function addActivity(event) {
+  event.preventDefault();
+
+  const project = document.getElementById('activityProject').value.trim();
+  const name = document.getElementById('activityName').value.trim();
+
+  if (!name) {
+    showMessage('Enter an activity name.', 'error');
+    return;
+  }
+
+  try {
+    showLoading(true);
+    const { error } = await supabaseClient
+      .from('activity_management')
+      .insert({
+        project_title: project || null,
+        activity_name: name,
+        is_active: true
+      });
+
+    if (error) throw error;
+
+    document.getElementById('activityName').value = '';
+    await loadActivityManagement();
+    showMessage('Activity added.', 'success');
+  } catch (error) {
+    showMessage('Unable to add activity: ' + error.message, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function handleActivityClick(event) {
+  const button = event.target.closest('[data-action]');
+  if (!button) return;
+
+  const row = state.activities.find(r => String(r.id) === button.dataset.id);
+  if (!row) return;
+
+  try {
+    showLoading(true);
+
+    const query = supabaseClient.from('activity_management');
+    const { error } = button.dataset.action === 'toggle-activity'
+      ? await query
+          .update({ is_active: !row.is_active, updated_at: new Date().toISOString() })
+          .eq('id', row.id)
+      : await query.delete().eq('id', row.id);
+
+    if (error) throw error;
+    await loadActivityManagement();
+  } catch (error) {
+    showMessage('Unable to update activity: ' + error.message, 'error');
+  } finally {
+    showLoading(false);
   }
 }
 

@@ -20,6 +20,26 @@ console.log("appBaseUrl:", appBaseUrl);
 
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+const jsonHeaders = {
+  "Content-Type": "application/json",
+  "Access-Control-Allow-Origin": "*"
+};
+
+function errorResponse(message: string, status = 400) {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: jsonHeaders
+  });
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 serve(async (req) => {
   console.log("Request received:", req.method, req.url);
 
@@ -38,13 +58,7 @@ serve(async (req) => {
 
   if (req.method !== "POST") {
     console.log("Invalid method:", req.method);
-    return new Response(
-      JSON.stringify({ error: "Method not allowed" }),
-      {
-        status: 405,
-        headers: { "Content-Type": "application/json" }
-      }
-    );
+    return errorResponse("Method not allowed", 405);
   }
 
   try {
@@ -56,76 +70,97 @@ serve(async (req) => {
       requesterName,
       requesterEmail,
       justification,
-      modifications
+      modifications,
+      round
     } = body;
 
-    if (!institution || !requesterName || !requesterEmail || !justification) {
+    if (
+      !institution ||
+      !requesterName ||
+      !requesterEmail ||
+      !justification ||
+      !round
+    ) {
       console.log("Missing required fields");
-      return new Response(
-        JSON.stringify({ error: "Missing required fields" }),
-        {
-          status: 400,
-          headers: { "Content-Type": "application/json" }
-        }
-      );
+      return errorResponse("Missing required fields");
     }
+
+    const roundKey = String(round).toUpperCase().trim();
 
     if (!Array.isArray(modifications) || modifications.length === 0) {
       console.log("No modifications provided");
-      return new Response(
-        JSON.stringify({ error: "No modifications provided" }),
-        {
-          status: 400,
-          headers: { "Content-Type": "application/json" }
-        }
-      );
+      return errorResponse("No modifications provided");
     }
 
     console.log("Validating modifications...");
-    let currentTotal = 0;
     let proposedTotal = 0;
 
     for (const mod of modifications) {
-      const current = parseFloat(mod.current_budget) || 0;
-      const proposed = parseFloat(mod.proposed_budget) || 0;
+      const proposed = Number(mod.proposed_budget ?? 0);
 
-      if (proposed < 0) {
-        console.log("Negative budget amount detected");
-        return new Response(
-          JSON.stringify({
-            error: "Budget amounts cannot be negative"
-          }),
-          { status: 400, headers: { "Content-Type": "application/json" } }
+      if (
+        !Number.isFinite(proposed) ||
+        proposed < 0 ||
+        !Number.isInteger(proposed)
+      ) {
+        console.log("Invalid budget amount detected");
+        return errorResponse(
+          "Budget amounts must be non-negative whole dollars"
         );
       }
 
-      currentTotal += current;
+      const modRound = String(mod.round ?? roundKey).toUpperCase().trim();
+      if (modRound !== roundKey) {
+        return errorResponse(
+          "Modification round does not match request round"
+        );
+      }
+
       proposedTotal += proposed;
     }
 
+    // The proposed total must equal the college's allocation for the round,
+    // including for an initial budget.
+    const { data: allocation, error: allocError } = await supabase
+      .from("college_allocations")
+      .select("allocation_amount")
+      .eq("institution", institution)
+      .eq("round", roundKey)
+      .maybeSingle();
+
+    if (allocError) {
+      console.error("Allocation lookup error:", allocError);
+      return errorResponse("Unable to verify allocation", 500);
+    }
+
+    const allocated = Number(allocation?.allocation_amount);
+
+    if (!allocation || !(allocated > 0)) {
+      console.log("No allocation set");
+      return errorResponse(
+        `No ${roundKey} allocation is set for this institution`
+      );
+    }
+
     console.log(
-      "Budget totals - Current:",
-      currentTotal,
+      "Budget totals - Allocation:",
+      allocated,
       "Proposed:",
       proposedTotal
     );
 
-    if (Math.abs(currentTotal - proposedTotal) >= 0.005) {
-      console.log("Budget totals do not match");
-      return new Response(
-        JSON.stringify({
-          error: "Proposed budget must equal current budget"
-        }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
+    if (Math.abs(proposedTotal - allocated) >= 0.005) {
+      console.log("Proposed total does not equal allocation");
+      return errorResponse(
+        `Proposed budget must equal the ${roundKey} allocation`
       );
     }
 
     const requestNumber =
       "REQ-" +
-      crypto
-        .getRandomValues(new Uint8Array(4))
-        .reduce((a: string, b: number) => a + b.toString(16), "")
-        .substring(0, 8)
+      Array.from(crypto.getRandomValues(new Uint8Array(4)))
+        .map((b: number) => b.toString(16).padStart(2, "0"))
+        .join("")
         .toUpperCase();
 
     console.log("Creating submission with request number:", requestNumber);
@@ -139,6 +174,7 @@ serve(async (req) => {
           requester_email: requesterEmail,
           institution: institution,
           justification: justification,
+          round: roundKey,
           status: "Pending"
         })
         .select()
@@ -146,10 +182,7 @@ serve(async (req) => {
 
     if (insertError) {
       console.error("Insert error:", insertError);
-      return new Response(
-        JSON.stringify({ error: "Failed to create submission" }),
-        { status: 500, headers: { "Content-Type": "application/json" } }
-      );
+      return errorResponse("Failed to create submission", 500);
     }
 
     console.log("Submission created:", submission.id);
@@ -157,18 +190,18 @@ serve(async (req) => {
     const modificationRows = modifications.map(
       (mod: Record<string, unknown>) => ({
         submission_id: submission.id,
+        round: roundKey,
         title: mod.title,
         activity_title: mod.activity_title,
-        budget_item_description: mod.budget_item_description,
+        object_category: mod.object_category,
         object_code: mod.object_code,
-        current_budget: parseFloat(
-          mod.current_budget as string
-        ) || 0,
-        proposed_budget: parseFloat(
-          mod.proposed_budget as string
-        ) || 0,
-        current_expenditure: 0,
-        proposed_description: mod.proposed_description
+        current_budget: Number(mod.current_budget) || 0,
+        proposed_budget: Number(mod.proposed_budget) || 0,
+        current_budget_description: mod.current_budget_description,
+        proposed_budget_description: mod.proposed_budget_description,
+        activity_status: mod.activity_status,
+        is_new_line: Boolean(mod.is_new_line),
+        current_expenditure: 0
       })
     );
 
@@ -180,12 +213,12 @@ serve(async (req) => {
 
     if (modError) {
       console.error("Modification insert error:", modError);
-      return new Response(
-        JSON.stringify({
-          error: "Failed to create modifications"
-        }),
-        { status: 500, headers: { "Content-Type": "application/json" } }
-      );
+      // Avoid leaving an orphaned submission without line items.
+      await supabase
+        .from("budget_submissions")
+        .delete()
+        .eq("id", submission.id);
+      return errorResponse("Failed to create modifications", 500);
     }
 
     console.log("Modifications inserted successfully");
@@ -205,28 +238,14 @@ serve(async (req) => {
         success: true,
         request_number: requestNumber
       }),
-      {
-        status: 200,
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*"
-        }
-      }
+      { status: 200, headers: jsonHeaders }
     );
   } catch (error) {
     console.error("Error:", error);
 
-    return new Response(
-      JSON.stringify({
-        error: error instanceof Error ? error.message : "Unknown error"
-      }),
-      {
-        status: 500,
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*"
-        }
-      }
+    return errorResponse(
+      error instanceof Error ? error.message : "Unknown error",
+      500
     );
   }
 });
@@ -243,22 +262,21 @@ async function sendEmails(
   }
 
   const adminLink = `${appBaseUrl}admin.html`;
-  const requesterLink = `${appBaseUrl}?requestId=${requestNumber}`;
 
   const adminEmailBody = `
-    <h2>Budget Modification Request Submitted</h2>
-    <p><strong>Request ID:</strong> ${requestNumber}</p>
-    <p><strong>Requester:</strong> ${requesterName}</p>
-    <p><strong>Email:</strong> ${requesterEmail}</p>
-    <p><strong>Institution:</strong> ${institution}</p>
+    <h2>Budget Request Submitted</h2>
+    <p><strong>Request ID:</strong> ${escapeHtml(requestNumber)}</p>
+    <p><strong>Requester:</strong> ${escapeHtml(requesterName)}</p>
+    <p><strong>Email:</strong> ${escapeHtml(requesterEmail)}</p>
+    <p><strong>Institution:</strong> ${escapeHtml(institution)}</p>
     <p><a href="${adminLink}">View Request in Admin Dashboard</a></p>
   `;
 
   const requesterEmailBody = `
-    <h2>Budget Modification Request Received</h2>
-    <p>Dear ${requesterName},</p>
-    <p>Your budget modification request has been submitted and is pending review.</p>
-    <p><strong>Request ID:</strong> ${requestNumber}</p>
+    <h2>Budget Request Received</h2>
+    <p>Dear ${escapeHtml(requesterName)},</p>
+    <p>Your budget request has been submitted and is pending review.</p>
+    <p><strong>Request ID:</strong> ${escapeHtml(requestNumber)}</p>
     <p>You will receive an email notification when your request has been reviewed.</p>
     <p>If you have any questions, please contact your administrator.</p>
   `;
@@ -275,7 +293,7 @@ async function sendEmails(
       body: JSON.stringify({
         from: "noreply@desertcolleges.org",
         to: adminEmail.trim(),
-        subject: `Budget Modification Request: ${requestNumber}`,
+        subject: `Budget Request: ${requestNumber}`,
         html: adminEmailBody
       })
     });

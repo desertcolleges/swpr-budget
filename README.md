@@ -4,7 +4,7 @@ Budget modification request tool for Regional Strong Workforce.
 
 ## Implementation notes
 
-- Header branding now uses `images/iedrc-logo.svg` in `index.html`, `admin.html`, and `status.html`.
+- Header branding now uses `images/iedrc-logo.png` in `index.html`, `admin.html`, and `status.html`.
 - Requester flow now uses a project → activity → object-category (1000s-6000s) modification structure.
 - Activity deletion removes all six object-category rows from local state and excludes the activity from submission payload.
 - New activity creation adds six object-category rows immediately with `$0` and blank proposed descriptions.
