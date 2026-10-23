@@ -622,3 +622,83 @@ $$;
 
 revoke all on function public.get_round_history(text, text) from public;
 grant execute on function public.get_round_history(text, text) to anon, authenticated;
+
+-- Finalize: apply an Approved request's changed lines to budget_reference
+-- (replacing every existing row for that institution/project/activity/object
+-- category with a single row at the proposed amount) and mark it Finalized.
+create or replace function public.admin_finalize_submission(p_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  sub public.budget_submissions%rowtype;
+  mod public.submission_modifications%rowtype;
+  v_digit text;
+  v_code text;
+begin
+  if not exists (select 1 from public.admin_users a where a.user_id = auth.uid() and a.active = true) then
+    raise exception 'Not authorized';
+  end if;
+
+  select * into sub from public.budget_submissions where id = p_id for update;
+  if not found then
+    raise exception 'Request not found';
+  end if;
+  if sub.status <> 'Approved' then
+    raise exception 'Only approved requests can be finalized';
+  end if;
+
+  for mod in
+    select * from public.submission_modifications where submission_id = p_id
+  loop
+    if abs(coalesce(mod.proposed_budget, 0) - coalesce(mod.current_budget, 0)) < 0.005
+       and coalesce(trim(mod.proposed_budget_description), '') = coalesce(trim(mod.current_budget_description), '') then
+      continue;
+    end if;
+
+    -- Prefer the stored category (e.g. '5000s'); fall back to the object code.
+    -- Same rule as the app: leading digit 1-6, otherwise 6000s.
+    v_digit := substring(regexp_replace(coalesce(nullif(mod.object_category, ''), mod.object_code, ''), '[^0-9]', '', 'g') from 1 for 1);
+    if v_digit is null or v_digit not between '1' and '6' then
+      v_digit := '6';
+    end if;
+
+    delete from public.budget_reference br
+    where br.institution = sub.institution
+      and br.title = mod.title
+      and br.activity_title = mod.activity_title
+      and (
+        case
+          when substring(regexp_replace(coalesce(br.object_code, ''), '[^0-9]', '', 'g') from 1 for 1) between '1' and '6'
+            then substring(regexp_replace(coalesce(br.object_code, ''), '[^0-9]', '', 'g') from 1 for 1)
+          else '6'
+        end
+      ) = v_digit;
+
+    if coalesce(mod.proposed_budget, 0) > 0
+       or coalesce(trim(mod.proposed_budget_description), '') <> '' then
+      v_code := coalesce(nullif(trim(mod.object_code), ''), v_digit || '000');
+
+      insert into public.budget_reference (
+        source_key, title, institution, activity_title,
+        budget_item_description, object_code, budget, sync_batch, synced_at
+      ) values (
+        'finalized:' || sub.request_number || ':' || mod.title || ':' || mod.activity_title || ':' || v_digit,
+        mod.title, sub.institution, mod.activity_title,
+        coalesce(mod.proposed_budget_description, ''), v_code,
+        coalesce(mod.proposed_budget, 0),
+        'finalized-' || sub.request_number, now()
+      );
+    end if;
+  end loop;
+
+  update public.budget_submissions
+  set status = 'Finalized', finalized_at = now()
+  where id = p_id;
+end;
+$$;
+
+revoke all on function public.admin_finalize_submission(uuid) from public;
+grant execute on function public.admin_finalize_submission(uuid) to authenticated;
