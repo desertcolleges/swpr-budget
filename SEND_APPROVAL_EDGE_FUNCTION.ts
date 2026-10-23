@@ -1,7 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const resendApiKey = Deno.env.get("RESEND_API_KEY") || "";
-const appBaseUrl = "https://desertcolleges.github.io/swpr-budget-mod";
+const replyToEmail = Deno.env.get("REPLY_TO_EMAIL") || Deno.env.get("ADMIN_NOTIFICATION_EMAIL") || "taylor@desertcolleges.org";
+const appBaseUrl = (Deno.env.get("APP_BASE_URL") || "https://desertcolleges.github.io/swpr-budget").replace(/\/$/, "");
 
 function escapeHtml(value: unknown): string {
   return String(value || "")
@@ -35,7 +36,7 @@ serve(async (req) => {
 
   try {
     const body = await req.json();
-    const { requester_email, request_number, action, notes, status_token } = body;
+    const { requester_email, request_number, action, notes } = body;
 
     if (!requester_email || !request_number || !action) {
       return new Response(
@@ -49,10 +50,7 @@ serve(async (req) => {
       throw new Error("RESEND_API_KEY is not configured");
     }
 
-    const tokenQuery = status_token
-      ? `&token=${encodeURIComponent(status_token)}`
-      : "";
-    const statusLink = `${appBaseUrl}/status.html?requestId=${encodeURIComponent(request_number)}${tokenQuery}`;
+    const statusLink = `${appBaseUrl}/status.html?requestId=${encodeURIComponent(request_number)}`;
     if (!["Approved", "Rejected", "Finalized"].includes(action)) {
       return new Response(
         JSON.stringify({ error: "Unsupported action" }),
@@ -100,6 +98,7 @@ serve(async (req) => {
       body: JSON.stringify({
         from: "noreply@desertcolleges.org",
         to: requester_email,
+        reply_to: replyToEmail,
         subject,
         html: htmlBody
       })

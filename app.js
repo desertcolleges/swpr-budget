@@ -24,7 +24,8 @@ const state = {
   allocations: {},
   managedActivities: [],
   roundHistory: [],
-  openRequest: null
+  openRequest: null,
+  hasUnsavedChanges: false
 };
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
@@ -52,6 +53,13 @@ document.addEventListener('DOMContentLoaded', () => {
   document
     .getElementById('cancelModificationButton')
     .addEventListener('click', () => {
+      if (
+        state.hasUnsavedChanges &&
+        !confirm('Discard your unsaved changes?')
+      ) {
+        return;
+      }
+      state.hasUnsavedChanges = false;
       if (state.isNewBudget) {
         state.isNewBudget = false;
         state.modificationProjects = [];
@@ -100,8 +108,44 @@ document.addEventListener('DOMContentLoaded', () => {
     .getElementById('historyPanel')
     .addEventListener('click', handleHistoryClick);
 
-  loadInstitutions();
+  window.addEventListener('beforeunload', event => {
+    if (state.hasUnsavedChanges) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+  });
+
+  ['modificationRows', 'submissionForm'].forEach(id => {
+    const markDirty = () => {
+      state.hasUnsavedChanges = true;
+    };
+    document.getElementById(id).addEventListener('input', markDirty);
+    document.getElementById(id).addEventListener('change', markDirty);
+  });
+
+  loadInstitutions().then(handleDeepLink);
 });
+
+async function handleDeepLink() {
+  const params = new URLSearchParams(window.location.search);
+  const institution = params.get('institution');
+  const round = normalizeRoundToken(params.get('round'));
+  if (!institution) return;
+
+  const select = document.getElementById('institutionSelect');
+  const match = Array.from(select.options).find(option => option.value === institution);
+  if (!match) return;
+
+  select.value = institution;
+  await loadSelectedInstitution();
+
+  if (!round || state.institution !== institution) return;
+  if (!state.visibleRounds.includes(round)) return;
+
+  state.selectedRound = round;
+  showRoundDetailView();
+  if (params.get('resubmit')) await showModificationView();
+}
 
 async function loadVisibleRounds() {
   try {
@@ -619,6 +663,13 @@ function renderBudgetTableForRound(round) {
 
   const remaining = currentTotal - expenditureTotal;
 
+  const overBudgetCount = roundRows.filter(
+    row =>
+      toNumber(row.budget) -
+        getExpenditureForBudgetRow(row, groupedExpenditures) <
+      -0.005
+  ).length;
+
   document.getElementById('roundCurrentTotal').textContent =
     formatCurrency(currentTotal);
   document.getElementById('roundExpenditureTotal').textContent =
@@ -628,7 +679,11 @@ function renderBudgetTableForRound(round) {
   remainingElement.textContent = formatCurrency(remaining);
   remainingElement.className = remaining < 0 ? 'difference-invalid' : '';
 
-  let html = `
+  let html = overBudgetCount
+    ? `<div class="alert alert-error">${overBudgetCount} budget line${overBudgetCount === 1 ? ' is' : 's are'} over budget. A budget modification is needed to cover the overage.</div>`
+    : '';
+
+  html += `
     <div class="table-wrapper">
       <table>
         <thead>
@@ -662,7 +717,7 @@ function renderBudgetTableForRound(round) {
         <td colspan="4">${escapeHtml(project)}</td>
         <td class="money">${formatCurrency(projectBudget)}</td>
         <td class="money">${formatCurrency(projectExpenditures)}</td>
-        <td class="money">${formatCurrency(projectBudget - projectExpenditures)}</td>
+        <td class="money ${projectBudget - projectExpenditures < -0.005 ? 'difference-invalid' : ''}">${formatCurrency(projectBudget - projectExpenditures)}</td>
       </tr>
     `;
 
@@ -673,15 +728,18 @@ function renderBudgetTableForRound(round) {
         groupedExpenditures
       );
 
+      const lineRemaining = budget - expenditures;
+      const isOver = lineRemaining < -0.005;
+
       html += `
-        <tr>
+        <tr${isOver ? ' class="over-budget-row"' : ''}>
           <td>${escapeHtml(row.title)}</td>
           <td>${escapeHtml(row.activity_title)}</td>
           <td>${escapeHtml(row.budget_item_description)}</td>
           <td>${escapeHtml(row.object_code)}</td>
           <td class="money">${formatCurrency(budget)}</td>
           <td class="money">${formatCurrency(expenditures)}</td>
-          <td class="money">${formatCurrency(budget - expenditures)}</td>
+          <td class="money ${isOver ? 'difference-invalid' : ''}">${formatCurrency(lineRemaining)}${isOver ? '<br><small>Modification needed</small>' : ''}</td>
         </tr>
       `;
     });
@@ -1310,11 +1368,12 @@ async function submitModification(event) {
 
     document.getElementById('submissionForm').reset();
 
-    showMessage(
+    state.hasUnsavedChanges = false;
+    showSubmissionSuccess(
+      result.request_number,
       result.resubmitted
-        ? `Request ${result.request_number} was updated and resubmitted for approval (${state.selectedRound}).`
-        : `Request ${result.request_number} was submitted successfully for ${state.selectedRound}.`,
-      'success'
+        ? `was updated and resubmitted for approval (${state.selectedRound}).`
+        : `was submitted successfully for ${state.selectedRound}.`
     );
 
     state.modificationProjects = [];
@@ -1534,6 +1593,7 @@ function toRoundNumber(round) {
 }
 
 function hideSections() {
+  state.hasUnsavedChanges = false;
   document.getElementById('roundSection').classList.add('hidden');
   document
     .getElementById('roundDetailSection')
@@ -1584,6 +1644,28 @@ function cssEscape(value) {
   }
 
   return String(value || '').replace(/(["'\\#.:\[\]\(\)\s])/g, '\\$1');
+}
+
+function showSubmissionSuccess(requestNumber, text) {
+  document.getElementById('messageArea').innerHTML = `
+    <div class="alert alert-success">
+      Request <strong>${escapeHtml(requestNumber)}</strong> ${escapeHtml(text)}
+      Save your request number to check its status later.
+      <button type="button" class="button secondary small-button" id="copyRequestNumberButton">Copy request number</button>
+      <a class="button secondary small-button" href="status.html?requestId=${encodeURIComponent(requestNumber)}">View status</a>
+    </div>
+  `;
+
+  document
+    .getElementById('copyRequestNumberButton')
+    .addEventListener('click', async event => {
+      try {
+        await navigator.clipboard.writeText(requestNumber);
+        event.target.textContent = 'Copied!';
+      } catch (error) {
+        event.target.textContent = 'Copy failed';
+      }
+    });
 }
 
 function showMessage(message, type) {

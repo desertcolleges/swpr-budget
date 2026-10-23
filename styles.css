@@ -45,6 +45,11 @@ body {
   gap: 16px;
 }
 
+.brand-lockup > a {
+  display: flex;
+  flex: 0 0 auto;
+}
+
 .brand-logo {
   width: auto;
   height: clamp(120px, 16vw, 150px);
@@ -195,6 +200,15 @@ button {
 
 .difference-invalid {
   color: var(--danger);
+}
+
+.over-budget-row td {
+  background: #fdecec;
+}
+
+.alert .button {
+  margin-left: 8px;
+  text-decoration: none;
 }
 
 .table-wrapper {

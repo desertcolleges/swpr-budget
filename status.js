@@ -149,7 +149,19 @@ function renderModificationTable() {
 function renderRecordNotice() {
   const block = document.getElementById('resubmissionBlock');
 
+  const request = state.request;
+  const canResubmit = ['Pending', 'Approved', 'Rejected'].includes(request.status);
+  const resubmitParams = new URLSearchParams({
+    institution: request.institution || '',
+    round: request.round || '',
+    resubmit: request.request_number
+  });
+  const resubmitHtml = canResubmit
+    ? `<p class="no-print"><a class="button primary" href="index.html?${escapeHtml(resubmitParams.toString())}">${request.status === 'Rejected' ? 'Edit &amp; Resubmit Request' : 'Edit Request'}</a></p>`
+    : '';
+
   block.innerHTML = `
+    ${resubmitHtml}
     <strong>PDF Export:</strong>
     Server-side PDF is not implemented yet. Use “Download PDF” to open your browser print dialog and save this page as a PDF.
   `;
