@@ -620,6 +620,11 @@ a {
   color: #1d3a8a;
 }
 
+.status-reset {
+  background: #eee;
+  color: #444;
+}
+
 .project-delta {
   float: right;
   font-size: 0.85rem;

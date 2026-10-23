@@ -958,6 +958,7 @@ function renderAllocations() {
             <td class="money">${formatCurrency(row.allocation_amount)}</td>
             <td>
               <button class="button secondary small-button" type="button" data-action="edit-allocation" data-id="${escapeAttribute(row.id)}">Edit</button>
+              <button class="button secondary small-button" type="button" data-action="reset-budget" data-id="${escapeAttribute(row.id)}">Reset Budget</button>
               <button class="button danger small-button" type="button" data-action="delete-allocation" data-id="${escapeAttribute(row.id)}">Delete</button>
             </td>
           </tr>`).join('')}
@@ -1016,6 +1017,11 @@ async function handleAllocationClick(event) {
     return;
   }
 
+  if (button.dataset.action === 'reset-budget') {
+    await resetBudget(row);
+    return;
+  }
+
   if (!confirm(`Delete ${row.round} allocation for ${row.institution}?`)) return;
 
   try {
@@ -1029,6 +1035,37 @@ async function handleAllocationClick(event) {
     await loadAllocations();
   } catch (error) {
     showMessage('Unable to delete allocation: ' + error.message, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function resetBudget(row) {
+  if (!confirm(
+    `Reset the ${row.round} budget for ${row.institution}?\n\n` +
+    'The current budget will be removed and any open request closed. ' +
+    'The college must build a new budget against its allocation. ' +
+    'Past requests stay in the history. This cannot be undone.'
+  )) return;
+
+  try {
+    showLoading(true);
+    clearMessage();
+
+    const { error } = await supabaseClient.rpc('admin_reset_budget', {
+      p_institution: row.institution,
+      p_round: row.round
+    });
+
+    if (error) throw error;
+
+    showMessage(
+      `${row.round} budget reset for ${row.institution}. They must build a new budget.`,
+      'success'
+    );
+    await loadRequests();
+  } catch (error) {
+    showMessage('Unable to reset budget: ' + error.message, 'error');
   } finally {
     showLoading(false);
   }
