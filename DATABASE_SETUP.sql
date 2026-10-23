@@ -330,3 +330,187 @@ end;
 $$;
 
 grant execute on function public.rename_institution(uuid, text) to authenticated;
+
+-- =====================================================================
+-- Projects (each belongs to exactly one round) and their activities
+-- =====================================================================
+create table if not exists public.projects (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  round text check (round is null or round ~ '^R[0-9]+$'),
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.project_activities (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  activity_name text not null,
+  created_at timestamptz not null default now(),
+  unique (project_id, activity_name)
+);
+
+alter table public.projects enable row level security;
+alter table public.project_activities enable row level security;
+
+DROP POLICY IF EXISTS "Public can read active projects" ON public.projects;
+create policy "Public can read active projects"
+on public.projects for select to anon, authenticated
+using (is_active = true);
+
+DROP POLICY IF EXISTS "Active admins can manage projects" ON public.projects;
+create policy "Active admins can manage projects"
+on public.projects for all to authenticated
+using (exists (select 1 from public.admin_users a where a.user_id = auth.uid() and a.active = true))
+with check (exists (select 1 from public.admin_users a where a.user_id = auth.uid() and a.active = true));
+
+DROP POLICY IF EXISTS "Public can read activities of active projects" ON public.project_activities;
+create policy "Public can read activities of active projects"
+on public.project_activities for select to anon, authenticated
+using (exists (select 1 from public.projects p where p.id = project_id and p.is_active = true));
+
+DROP POLICY IF EXISTS "Active admins can manage project activities" ON public.project_activities;
+create policy "Active admins can manage project activities"
+on public.project_activities for all to authenticated
+using (exists (select 1 from public.admin_users a where a.user_id = auth.uid() and a.active = true))
+with check (exists (select 1 from public.admin_users a where a.user_id = auth.uid() and a.active = true));
+
+-- One-time seed from the legacy activity_management table.
+-- Round is parsed from the project name when it contains an "R<number>" token; otherwise it is
+-- left blank (project hidden from requesters until you set a round on the Projects tab).
+-- Legacy activities with no project are copied into every seeded project.
+do $$
+begin
+  if not exists (select 1 from public.projects) then
+    insert into public.projects (name, round)
+    select distinct btrim(project_title),
+           case when project_title ~* '\mR\s*[0-9]+\M'
+                then 'R' || ((regexp_match(project_title, '\mR\s*([0-9]+)\M', 'i'))[1])::int
+           end
+    from public.activity_management
+    where project_title is not null and btrim(project_title) <> ''
+    on conflict (name) do nothing;
+
+    insert into public.project_activities (project_id, activity_name)
+    select p.id, btrim(am.activity_name)
+    from public.activity_management am
+    join public.projects p on lower(p.name) = lower(btrim(am.project_title))
+    where am.is_active
+    on conflict do nothing;
+
+    insert into public.project_activities (project_id, activity_name)
+    select p.id, btrim(am.activity_name)
+    from public.activity_management am
+    cross join public.projects p
+    where am.is_active and (am.project_title is null or btrim(am.project_title) = '')
+    on conflict do nothing;
+  end if;
+end $$;
+
+-- Copy a project (and its activities) under a new name/round.
+create or replace function public.copy_project(p_source uuid, p_name text, p_round text)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_new uuid;
+begin
+  if not exists (
+    select 1 from public.admin_users a where a.user_id = auth.uid() and a.active = true
+  ) then
+    raise exception 'Not authorized';
+  end if;
+
+  insert into public.projects (name, round, is_active)
+  values (btrim(p_name), p_round, true)
+  returning id into v_new;
+
+  insert into public.project_activities (project_id, activity_name)
+  select v_new, activity_name from public.project_activities where project_id = p_source;
+
+  return v_new;
+end;
+$$;
+
+grant execute on function public.copy_project(uuid, text, text) to authenticated;
+
+-- =====================================================================
+-- Google SSO: admin allow-list (desertcolleges.org accounts only)
+-- =====================================================================
+create table if not exists public.admin_allowlist (
+  email text primary key check (lower(email) like '%@desertcolleges.org' and email = lower(email)),
+  display_name text not null default '',
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+alter table public.admin_allowlist enable row level security;
+
+DROP POLICY IF EXISTS "Active admins can manage allowlist" ON public.admin_allowlist;
+create policy "Active admins can manage allowlist"
+on public.admin_allowlist for all to authenticated
+using (exists (select 1 from public.admin_users a where a.user_id = auth.uid() and a.active = true))
+with check (exists (select 1 from public.admin_users a where a.user_id = auth.uid() and a.active = true));
+
+-- Seed the allow-list from existing admins that already have a desertcolleges.org email.
+insert into public.admin_allowlist (email, display_name)
+select lower(u.email), coalesce(u.raw_user_meta_data->>'full_name', '')
+from public.admin_users a
+join auth.users u on u.id = a.user_id
+where a.active = true and lower(u.email) like '%@desertcolleges.org'
+on conflict (email) do nothing;
+
+-- Called after Google sign-in: grants admin access if the account is on the allow-list.
+create or replace function public.claim_admin_access()
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_email text := lower(coalesce(auth.jwt() ->> 'email', ''));
+begin
+  if auth.uid() is null or v_email not like '%@desertcolleges.org' then
+    return false;
+  end if;
+
+  if not exists (
+    select 1 from public.admin_allowlist where email = v_email and active = true
+  ) then
+    return false;
+  end if;
+
+  update public.admin_users set active = true where user_id = auth.uid();
+  if not found then
+    insert into public.admin_users (user_id, active) values (auth.uid(), true);
+  end if;
+  return true;
+end;
+$$;
+
+grant execute on function public.claim_admin_access() to authenticated;
+
+-- Keep admin_users in sync when an allow-list entry is deactivated, deleted, or re-emailed.
+create or replace function public.sync_admin_allowlist()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if tg_op in ('UPDATE', 'DELETE') then
+    update public.admin_users set active = false
+    where user_id in (select id from auth.users where lower(email) = old.email)
+      and (tg_op = 'DELETE' or not new.active or new.email <> old.email);
+  end if;
+  return coalesce(new, old);
+end;
+$$;
+
+DROP TRIGGER IF EXISTS trg_sync_admin_allowlist ON public.admin_allowlist;
+create trigger trg_sync_admin_allowlist
+after update or delete on public.admin_allowlist
+for each row execute function public.sync_admin_allowlist();

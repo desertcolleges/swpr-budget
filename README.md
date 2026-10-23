@@ -28,3 +28,12 @@ Budget modification request tool for Regional Strong Workforce.
 - [ ] Admin: review a request and verify object category and descriptions are displayed clearly.
 - [ ] Requester: open status portal and verify full modification details with new fields.
 - [ ] Email: verify approval and rejection notifications include proper status link and wording.
+
+## Admin setup: projects, tabs, and Google SSO
+
+1. **Run the SQL.** Supabase → SQL Editor → paste all of `DATABASE_SETUP.sql` → Run (safe to re-run). This creates `projects`, `project_activities`, `admin_allowlist`, and the `copy_project` / `claim_admin_access` functions, and seeds projects from the old `activity_management` table.
+2. **Google Cloud.** console.cloud.google.com → APIs & Services → OAuth consent screen (choose *Internal* if desertcolleges.org is your Workspace) → Credentials → Create OAuth client ID (Web application). Add the authorized redirect URI shown in Supabase → Authentication → Providers → Google (`https://<project-ref>.supabase.co/auth/v1/callback`).
+3. **Supabase.** Authentication → Providers → Google: enable, paste client ID and secret. Authentication → URL Configuration: set Site URL to the deployed admin site and add `<site>/admin.html` to Redirect URLs.
+4. **Admins.** Existing admins with desertcolleges.org emails are seeded into the allow-list. Anyone else: sign in once, then use Admin → Admins tab to add `name@desertcolleges.org`. Only active allow-listed accounts can enter.
+5. **Projects.** Admin → Projects: review seeded projects, set the round on any marked *Unassigned* (hidden from requesters until set), then use Copy to create P62 etc. from P61.
+6. Optional: disable email/password sign-in in Supabase (Authentication → Providers → Email) now that the form is removed.
