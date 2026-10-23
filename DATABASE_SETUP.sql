@@ -131,6 +131,9 @@ with check (
 );
 
 -- Request status lookup by request number (semi-public).
+-- Remove stale overload that makes rpc('get_request_status', {p_request_number}) ambiguous.
+drop function if exists public.get_request_status(text, text, text);
+
 create or replace function public.get_request_status(
   p_request_number text
 )

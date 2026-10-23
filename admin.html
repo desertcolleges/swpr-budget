@@ -10,11 +10,13 @@
     <main class="container">
       <header class="page-header branded-header">
         <div class="brand-lockup">
-          <img
-            class="brand-logo"
-            src="images/iedrc-logo.png"
-            alt="IEDRC logo"
-          />
+          <a href="index.html" aria-label="Go to main page">
+            <img
+              class="brand-logo"
+              src="images/iedrc-logo.png"
+              alt="IEDRC logo"
+            />
+          </a>
           <div>
             <h1>IEDRC Budget Administration</h1>
             <p>Review requests, configure visible rounds, and manage workflow settings.</p>
@@ -152,6 +154,13 @@
             <option value="Rejected">Rejected</option>
             <option value="Finalized">Finalized</option>
           </select>
+          <label for="institutionFilter">Filter by institution</label>
+          <select id="institutionFilter">
+            <option value="">All Institutions</option>
+          </select>
+          <label for="requestSearch">Search</label>
+          <input id="requestSearch" type="search" placeholder="Request number, requester or email" />
+          <button id="exportRequestsButton" class="button secondary" type="button">Export CSV</button>
         </div>
 
         <div id="requestList" class="table-wrapper"></div>

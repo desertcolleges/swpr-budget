@@ -83,6 +83,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     .addEventListener('change', renderRequestList);
 
   document
+    .getElementById('institutionFilter')
+    .addEventListener('change', renderRequestList);
+
+  document
+    .getElementById('requestSearch')
+    .addEventListener('input', renderRequestList);
+
+  document
+    .getElementById('exportRequestsButton')
+    .addEventListener('click', exportRequestsCsv);
+
+  document
     .getElementById('backToRequestsButton')
     .addEventListener('click', showRequestList);
 
@@ -254,6 +266,7 @@ async function loadRequests() {
     if (error) throw error;
 
     state.requests = data || [];
+    populateInstitutionFilter();
     renderRequestList();
   } catch (error) {
     showMessage(
@@ -265,18 +278,78 @@ async function loadRequests() {
   }
 }
 
+function populateInstitutionFilter() {
+  const select = document.getElementById('institutionFilter');
+  const current = select.value;
+  const institutions = [
+    ...new Set(state.requests.map(request => request.institution).filter(Boolean))
+  ].sort();
+
+  select.innerHTML =
+    '<option value="">All Institutions</option>' +
+    institutions
+      .map(name => `<option value="${escapeAttribute(name)}">${escapeHtml(name)}</option>`)
+      .join('');
+  select.value = institutions.includes(current) ? current : '';
+}
+
+function getFilteredRequests() {
+  const status = document.getElementById('statusFilter').value;
+  const institution = document.getElementById('institutionFilter').value;
+  const search = document
+    .getElementById('requestSearch')
+    .value.trim()
+    .toLowerCase();
+
+  return state.requests.filter(request => {
+    if (status && request.status !== status) return false;
+    if (institution && request.institution !== institution) return false;
+    if (!search) return true;
+
+    return [request.request_number, request.requester_name, request.requester_email]
+      .some(value => String(value || '').toLowerCase().includes(search));
+  });
+}
+
+function exportRequestsCsv() {
+  const requests = getFilteredRequests();
+
+  if (!requests.length) {
+    showMessage('There are no requests to export.', 'error');
+    return;
+  }
+
+  const columns = [
+    'request_number', 'status', 'institution', 'round', 'requester_name',
+    'requester_email', 'revision_no', 'created_at', 'reviewed_at',
+    'finalized_at', 'justification', 'admin_notes'
+  ];
+
+  // Prefix formula-like values so spreadsheets don't execute them.
+  const cell = value => {
+    let text = String(value ?? '');
+    if (/^[=+\-@]/.test(text)) text = "'" + text;
+    return '"' + text.replaceAll('"', '""') + '"';
+  };
+
+  const csv = [
+    columns.join(','),
+    ...requests.map(request => columns.map(column => cell(request[column])).join(','))
+  ].join('\r\n');
+
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `budget-requests-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 function renderRequestList() {
   const container =
     document.getElementById('requestList');
 
-  const status =
-    document.getElementById('statusFilter').value;
-
-  const requests = status
-    ? state.requests.filter(
-        request => request.status === status
-      )
-    : state.requests;
+  const requests = getFilteredRequests();
 
   if (requests.length === 0) {
     container.innerHTML =
@@ -304,7 +377,7 @@ function renderRequestList() {
     html += `
       <tr>
         <td>
-          <span class="status-badge status-${request.status.toLowerCase()}">
+          <span class="status-badge status-${escapeAttribute(String(request.status).toLowerCase())}">
             ${escapeHtml(request.status)}
           </span>
         </td>

@@ -9,7 +9,7 @@ const adminEmail =
   Deno.env.get("ADMIN_NOTIFICATION_EMAIL") || "taylor@desertcolleges.org";
 const appBaseUrl =
   Deno.env.get("APP_BASE_URL") ||
-  "https://desertcolleges.github.io/swpr-budget-mod/";
+  "https://desertcolleges.github.io/swpr-budget/";
 
 console.log("Environment check:");
 console.log("supabaseUrl:", supabaseUrl ? "set" : "MISSING");
@@ -395,6 +395,7 @@ async function sendEmails(
         body: JSON.stringify({
           from: "noreply@desertcolleges.org",
           to: requesterEmail.trim(),
+          reply_to: adminEmail.trim(),
           subject: `Budget Request ${isResubmission ? "Resubmission Received" : "Received"}: ${requestNumber}`,
           html: requesterEmailBody
         })
