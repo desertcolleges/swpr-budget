@@ -691,6 +691,8 @@ begin
   where sm.submission_id = p_id
     and coalesce(sm.proposed_budget, 0) > 0;
 
+  perform set_config('app.finalizing', 'off', true);
+
   update public.budget_submissions
   set status = 'Finalized', finalized_at = now(), updated_at = now()
   where id = p_id;
