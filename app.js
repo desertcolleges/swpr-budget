@@ -8,6 +8,7 @@ const supabaseClient = window.supabase.createClient(
 
 const DEFAULT_VISIBLE_ROUNDS = ['R10'];
 const NEW_BUDGET_ROUND = 'R11';
+const OPEN_STATUSES = ['Pending', 'Approved', 'Rejected'];
 const OBJECT_CATEGORIES = ['1000s', '2000s', '3000s', '4000s', '5000s', '6000s'];
 
 const state = {
@@ -21,7 +22,9 @@ const state = {
   baselineCurrentTotal: 0,
   isNewBudget: false,
   allocations: {},
-  managedActivities: []
+  managedActivities: [],
+  roundHistory: [],
+  openRequest: null
 };
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
@@ -85,6 +88,17 @@ document.addEventListener('DOMContentLoaded', () => {
   document
     .getElementById('roundCards')
     .addEventListener('click', handleRoundCardClick);
+
+  document
+    .getElementById('roundTabs')
+    .addEventListener('click', event => {
+      const button = event.target.closest('[data-round-tab]');
+      if (button) setRoundTab(button.dataset.roundTab);
+    });
+
+  document
+    .getElementById('historyPanel')
+    .addEventListener('click', handleHistoryClick);
 
   loadInstitutions();
 });
@@ -361,6 +375,220 @@ function showRoundDetailView() {
     `${state.institution} • ${state.selectedRound}`;
 
   renderBudgetTableForRound(state.selectedRound);
+
+  const round = state.selectedRound;
+  state.roundHistory = [];
+  state.openRequest = null;
+  setRoundTab('budget');
+  renderRoundHistoryViews();
+
+  loadRoundHistory(round).then(() => {
+    if (state.selectedRound === round) renderRoundHistoryViews();
+  });
+}
+
+async function loadRoundHistory(round) {
+  state.roundHistory = [];
+  state.openRequest = null;
+
+  const { data, error } = await supabaseClient.rpc('get_round_history', {
+    p_institution: state.institution,
+    p_round: round
+  });
+
+  if (error) {
+    console.warn('Unable to load request history:', error.message);
+    return;
+  }
+
+  state.roundHistory = data || [];
+  state.openRequest =
+    state.roundHistory.find(item => OPEN_STATUSES.includes(item.status)) || null;
+}
+
+function setRoundTab(tab) {
+  document.querySelectorAll('#roundTabs [data-round-tab]').forEach(button => {
+    button.classList.toggle('active', button.dataset.roundTab === tab);
+  });
+  document.getElementById('budgetPanel').classList.toggle('hidden', tab !== 'budget');
+  document.getElementById('historyPanel').classList.toggle('hidden', tab !== 'history');
+
+  if (tab === 'history') showHistoryList();
+}
+
+function renderRoundHistoryViews() {
+  const request = state.openRequest;
+  const notice = document.getElementById('openRequestNotice');
+  const startButton = document.getElementById('startModificationButton');
+
+  startButton.textContent = request ? 'Edit & Resubmit Request' : 'Create Modification';
+
+  if (!request) {
+    notice.classList.add('hidden');
+    notice.innerHTML = '';
+  } else {
+    const messages = {
+      Pending: 'is pending review. You can edit and resubmit it while it is pending.',
+      Approved: 'was approved and is awaiting finalization. Editing it will return it to Pending for re-approval.',
+      Rejected: `was rejected${request.admin_notes ? ': ' + escapeHtml(request.admin_notes) : ''}. Edit and resubmit it to try again.`
+    };
+    notice.innerHTML = `<strong>Request ${escapeHtml(request.request_number)}</strong> ${messages[request.status] || ''}`;
+    notice.classList.remove('hidden');
+  }
+
+  showHistoryList();
+}
+
+function showHistoryList() {
+  document.getElementById('historyDetail').classList.add('hidden');
+  const list = document.getElementById('historyList');
+  list.classList.remove('hidden');
+
+  if (!state.roundHistory.length) {
+    list.innerHTML = '<p class="card">No modification requests have been submitted for this round.</p>';
+    return;
+  }
+
+  const rows = state.roundHistory.map(item => `
+    <tr>
+      <td>${escapeHtml(item.request_number)}</td>
+      <td><span class="status-badge status-${escapeAttribute(String(item.status).toLowerCase())}">${escapeHtml(item.status)}</span></td>
+      <td>${escapeHtml(item.revision_no || 1)}</td>
+      <td>${escapeHtml(item.requester_name)}</td>
+      <td>${formatDateTime(item.created_at)}</td>
+      <td>${formatDateTime(item.reviewed_at)}</td>
+      <td>${formatDateTime(item.finalized_at)}</td>
+      <td><button type="button" class="button primary small-button" data-history-request="${escapeAttribute(item.request_number)}">View</button></td>
+    </tr>
+  `).join('');
+
+  list.innerHTML = `
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Request</th><th>Status</th><th>Revision</th><th>Requester</th>
+            <th>Submitted</th><th>Reviewed</th><th>Finalized</th><th></th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+async function handleHistoryClick(event) {
+  if (event.target.closest('[data-history-back]')) {
+    showHistoryList();
+    return;
+  }
+
+  const button = event.target.closest('[data-history-request]');
+  if (!button) return;
+
+  try {
+    showLoading(true);
+    clearMessage();
+
+    const rows = await fetchRequestRows(button.dataset.historyRequest);
+    if (!rows.length) throw new Error('Request not found.');
+
+    const first = rows[0];
+    const detail = document.getElementById('historyDetail');
+    detail.innerHTML = `
+      <button type="button" class="button secondary" data-history-back>← Back to History</button>
+      <div class="card">
+        <h3>${escapeHtml(first.request_number)}
+          <span class="status-badge status-${escapeAttribute(String(first.status).toLowerCase())}">${escapeHtml(first.status)}</span>
+        </h3>
+        <p><strong>Requester:</strong> ${escapeHtml(first.requester_name)}</p>
+        <p><strong>Submitted:</strong> ${formatDateTime(first.created_at)} &nbsp; <strong>Reviewed:</strong> ${formatDateTime(first.reviewed_at)}</p>
+        <p><strong>Justification:</strong> ${escapeHtml(first.justification)}</p>
+        <p><strong>Admin Notes:</strong> ${escapeHtml(first.admin_notes || 'None')}</p>
+      </div>
+      ${window.ModRender.render(rows.filter(row => row.title || row.activity_title))}
+    `;
+
+    document.getElementById('historyList').classList.add('hidden');
+    detail.classList.remove('hidden');
+  } catch (error) {
+    showMessage('Unable to load request: ' + error.message, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function fetchRequestRows(requestNumber) {
+  const { data, error } = await supabaseClient.rpc('get_request_status', {
+    p_request_number: requestNumber
+  });
+
+  if (error) throw error;
+  return data || [];
+}
+
+function buildProjectsFromRequestRows(rows) {
+  const projects = new Map();
+
+  rows.filter(row => row.title && row.activity_title).forEach(row => {
+    if (!projects.has(row.title)) projects.set(row.title, new Map());
+    const activities = projects.get(row.title);
+    if (!activities.has(row.activity_title)) {
+      activities.set(row.activity_title, { is_new_line: false, byCategory: {} });
+    }
+    const activity = activities.get(row.activity_title);
+    if (row.is_new_line) activity.is_new_line = true;
+    activity.byCategory[row.object_category || inferObjectCategory(row.object_code)] = row;
+  });
+
+  return Array.from(projects.entries())
+    .map(([name, activities]) => ({
+      name,
+      activities: Array.from(activities.entries())
+        .map(([activityName, activity]) => ({
+          name: activityName,
+          is_new_line: activity.is_new_line,
+          categoryRows: OBJECT_CATEGORIES.map(category => {
+            const row = activity.byCategory[category];
+            const categoryRow = {
+              object_category: category,
+              object_code: row?.object_code || '',
+              current_budget: toNumber(row?.current_budget),
+              current_budget_description: row?.current_budget_description || '',
+              proposed_budget: toNumber(row?.proposed_budget),
+              proposed_budget_description: row?.proposed_budget_description || '',
+              modified: false
+            };
+            categoryRow.modified = isObjectRowModified(categoryRow);
+            return categoryRow;
+          })
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function prefillFromOpenRequest() {
+  const request = state.openRequest;
+  const submitButton = document.getElementById('submitButton');
+
+  if (!request) {
+    submitButton.textContent = 'Submit Round Request';
+    return false;
+  }
+
+  const rows = await fetchRequestRows(request.request_number);
+  state.modificationProjects = buildProjectsFromRequestRows(rows);
+
+  document.getElementById('requesterName').value = request.requester_name || '';
+  document.getElementById('requesterEmail').value = request.requester_email || '';
+  document.getElementById('justification').value = request.justification || '';
+  submitButton.textContent = 'Resubmit for Approval';
+  return true;
+}
+
+function formatDateTime(value) {
+  return value ? new Date(value).toLocaleString() : '—';
 }
 
 function renderBudgetTableForRound(round) {
@@ -463,7 +691,7 @@ function renderBudgetTableForRound(round) {
   container.innerHTML = html;
 }
 
-function showModificationView() {
+async function showModificationView() {
   state.isNewBudget = false;
   document.getElementById('newProjectControls').classList.add('hidden');
   document.getElementById('modificationSubheading').textContent =
@@ -485,8 +713,20 @@ function showModificationView() {
 
   state.baselineCurrentTotal = state.allocations[state.selectedRound];
 
-  state.approvedActivitiesByProject = buildApprovedActivities(roundRows);
   state.modificationProjects = buildModificationProjects(roundRows);
+
+  try {
+    showLoading(true);
+    await loadRoundHistory(state.selectedRound);
+    await prefillFromOpenRequest();
+  } catch (error) {
+    showMessage('Unable to load your existing request: ' + error.message, 'error');
+    return;
+  } finally {
+    showLoading(false);
+  }
+
+  state.approvedActivitiesByProject = buildApprovedActivities(roundRows);
 
   hideSections();
   document
@@ -494,13 +734,15 @@ function showModificationView() {
     .classList.remove('hidden');
 
   document.getElementById('modificationHeading').textContent =
-    `Submit ${state.selectedRound} Budget Modification`;
+    state.openRequest
+      ? `Edit & Resubmit ${state.selectedRound} Request ${state.openRequest.request_number}`
+      : `Submit ${state.selectedRound} Budget Modification`;
 
   renderModificationProjects();
   updateModificationTotals();
 }
 
-function startNewBudget(round) {
+async function startNewBudget(round) {
   clearMessage();
 
   if (!(state.allocations[round] > 0)) {
@@ -517,6 +759,18 @@ function startNewBudget(round) {
   state.approvedActivitiesByProject = {};
   state.baselineCurrentTotal = state.allocations[round] || 0;
 
+  try {
+    showLoading(true);
+    await loadRoundHistory(round);
+    await prefillFromOpenRequest();
+    state.approvedActivitiesByProject = buildApprovedActivities(getRowsForRound(round));
+  } catch (error) {
+    showMessage('Unable to load your existing request: ' + error.message, 'error');
+    return;
+  } finally {
+    showLoading(false);
+  }
+
   document.getElementById('projectOptions').innerHTML = getKnownProjects()
     .map(name => `<option value="${escapeAttribute(name)}"></option>`)
     .join('');
@@ -525,7 +779,9 @@ function startNewBudget(round) {
   document.getElementById('modificationSection').classList.remove('hidden');
   document.getElementById('newProjectControls').classList.remove('hidden');
   document.getElementById('modificationHeading').textContent =
-    `${state.institution} • Build New ${round} Budget`;
+    state.openRequest
+      ? `${state.institution} • Edit & Resubmit ${round} Request ${state.openRequest.request_number}`
+      : `${state.institution} • Build New ${round} Budget`;
   document.getElementById('modificationSubheading').textContent =
     state.baselineCurrentTotal > 0
       ? `Add projects and activities. The proposed total must equal your ${round} allocation.`
@@ -1055,7 +1311,9 @@ async function submitModification(event) {
     document.getElementById('submissionForm').reset();
 
     showMessage(
-      `Request ${result.request_number} was submitted successfully for ${state.selectedRound}.`,
+      result.resubmitted
+        ? `Request ${result.request_number} was updated and resubmitted for approval (${state.selectedRound}).`
+        : `Request ${result.request_number} was submitted successfully for ${state.selectedRound}.`,
       'success'
     );
 

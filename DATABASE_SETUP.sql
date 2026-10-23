@@ -514,3 +514,108 @@ DROP TRIGGER IF EXISTS trg_sync_admin_allowlist ON public.admin_allowlist;
 create trigger trg_sync_admin_allowlist
 after update or delete on public.admin_allowlist
 for each row execute function public.sync_admin_allowlist();
+
+-- ---------------------------------------------------------------------------
+-- Modification lifecycle: one open request per institution + round,
+-- Finalized status, revision history, admin delete, requester history.
+-- Open = Pending, Approved or Rejected (editable and resubmittable).
+-- Finalized closes the request so a fresh one can be started.
+-- ---------------------------------------------------------------------------
+
+-- Drop any legacy CHECK constraint limiting status values.
+do $$
+declare c record;
+begin
+  for c in
+    select conname from pg_constraint
+    where conrelid = 'public.budget_submissions'::regclass
+      and contype = 'c'
+      and pg_get_constraintdef(oid) ilike '%status%'
+  loop
+    execute format('alter table public.budget_submissions drop constraint %I', c.conname);
+  end loop;
+end $$;
+
+alter table public.budget_submissions
+  add column if not exists revision_no integer not null default 1,
+  add column if not exists finalized_at timestamptz,
+  add column if not exists updated_at timestamptz;
+
+-- Guarded: skipped with a notice if duplicate open requests already exist; resolve them, then re-run.
+do $$
+begin
+  create unique index if not exists uq_one_open_request_per_round
+    on public.budget_submissions (lower(institution), upper(round))
+    where status in ('Pending', 'Approved', 'Rejected');
+exception when unique_violation then
+  raise notice 'Duplicate open requests exist for an institution/round; delete or Finalize extras, then re-run to enforce one open request.';
+end $$;
+
+-- Snapshot of each prior version, written by the submit-budget edge function on resubmission.
+create table if not exists public.submission_revisions (
+  id uuid primary key default gen_random_uuid(),
+  submission_id uuid not null references public.budget_submissions(id) on delete cascade,
+  revision_no integer not null,
+  status text,
+  justification text,
+  admin_notes text,
+  modifications jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+alter table public.submission_revisions enable row level security;
+
+DROP POLICY IF EXISTS "Active admins can read revisions" ON public.submission_revisions;
+create policy "Active admins can read revisions"
+on public.submission_revisions for select to authenticated
+using (exists (select 1 from public.admin_users a where a.user_id = auth.uid() and a.active = true));
+
+-- Admin delete (removes line items and revisions too).
+create or replace function public.admin_delete_submission(p_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not exists (select 1 from public.admin_users a where a.user_id = auth.uid() and a.active = true) then
+    raise exception 'Not authorized';
+  end if;
+  delete from public.submission_modifications where submission_id = p_id;
+  delete from public.submission_revisions where submission_id = p_id;
+  delete from public.budget_submissions where id = p_id;
+end;
+$$;
+
+revoke all on function public.admin_delete_submission(uuid) from public;
+grant execute on function public.admin_delete_submission(uuid) to authenticated;
+
+-- Requester history for an institution + round (semi-public, like get_request_status).
+create or replace function public.get_round_history(p_institution text, p_round text)
+returns table (
+  request_number text,
+  requester_name text,
+  requester_email text,
+  status text,
+  justification text,
+  admin_notes text,
+  revision_no integer,
+  created_at timestamptz,
+  reviewed_at timestamptz,
+  finalized_at timestamptz
+)
+language sql
+security definer
+set search_path = public
+as $$
+  select bs.request_number, bs.requester_name, bs.requester_email, bs.status,
+         bs.justification, bs.admin_notes, bs.revision_no,
+         bs.created_at, bs.reviewed_at, bs.finalized_at
+  from public.budget_submissions bs
+  where lower(bs.institution) = lower(trim(p_institution))
+    and upper(bs.round) = upper(trim(p_round))
+  order by bs.created_at desc;
+$$;
+
+revoke all on function public.get_round_history(text, text) from public;
+grant execute on function public.get_round_history(text, text) to anon, authenticated;

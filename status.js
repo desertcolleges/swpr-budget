@@ -142,47 +142,8 @@ function renderStatusRecord() {
 }
 
 function renderModificationTable() {
-  const container = document.getElementById('requestModifications');
-
-  if (!state.modifications.length) {
-    container.innerHTML = '<p class="card">No modification lines were found for this request.</p>';
-    return;
-  }
-
-  let html = `
-    <table>
-      <thead>
-        <tr>
-          <th>Project</th>
-          <th>Activity</th>
-          <th>Object Category</th>
-          <th>Current Budget</th>
-          <th>Current Description</th>
-          <th>Proposed Budget</th>
-          <th>Proposed Description</th>
-          <th>New Activity</th>
-        </tr>
-      </thead>
-      <tbody>
-  `;
-
-  state.modifications.forEach(row => {
-    html += `
-      <tr>
-        <td>${escapeHtml(row.title)}</td>
-        <td>${escapeHtml(row.activity_title)}</td>
-        <td>${escapeHtml(row.object_category)}</td>
-        <td class="money">${formatCurrency(row.current_budget)}</td>
-        <td>${escapeHtml(row.current_budget_description || '—')}</td>
-        <td class="money">${formatCurrency(row.proposed_budget)}</td>
-        <td>${escapeHtml(row.proposed_budget_description || '—')}</td>
-        <td>${row.is_new_line ? '<span class="flag flag-new">Yes</span>' : 'No'}</td>
-      </tr>
-    `;
-  });
-
-  html += '</tbody></table>';
-  container.innerHTML = html;
+  document.getElementById('requestModifications').innerHTML =
+    window.ModRender.render(state.modifications);
 }
 
 function renderRecordNotice() {

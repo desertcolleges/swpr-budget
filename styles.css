@@ -599,3 +599,28 @@ a {
 
 .sub-tabs { margin-top: 16px; }
 .sub-tabs .tab-button { padding: 6px 12px; font-weight: 500; }
+
+/* Grouped review / history */
+.status-finalized {
+  background: #e0eaff;
+  color: #1d3a8a;
+}
+
+.project-delta {
+  float: right;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #475467;
+}
+
+.review-table .unchanged-row td { color: #8a949e; }
+.review-table .delta-up { color: #067647; font-weight: 700; }
+.review-table .delta-down { color: #b42318; font-weight: 700; }
+
+.history-notice {
+  border-left: 4px solid #0b5cab;
+  background: #f0f6ff;
+  padding: 10px 14px;
+  margin: 12px 0;
+  border-radius: 4px;
+}

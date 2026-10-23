@@ -156,40 +156,24 @@ serve(async (req) => {
       );
     }
 
-    const requestNumber =
-      "REQ-" +
-      Array.from(crypto.getRandomValues(new Uint8Array(4)))
-        .map((b: number) => b.toString(16).padStart(2, "0"))
-        .join("")
-        .toUpperCase();
+    // One open request (Pending/Approved/Rejected) per institution + round.
+    // If one exists, this submission revises it instead of creating a new one.
+    const { data: existing, error: existingError } = await supabase
+      .from("budget_submissions")
+      .select("*")
+      .eq("institution", institution)
+      .eq("round", roundKey)
+      .in("status", ["Pending", "Approved", "Rejected"])
+      .maybeSingle();
 
-    console.log("Creating submission with request number:", requestNumber);
-
-    const { data: submission, error: insertError } =
-      await supabase
-        .from("budget_submissions")
-        .insert({
-          request_number: requestNumber,
-          requester_name: requesterName,
-          requester_email: requesterEmail,
-          institution: institution,
-          justification: justification,
-          round: roundKey,
-          status: "Pending"
-        })
-        .select()
-        .single();
-
-    if (insertError) {
-      console.error("Insert error:", insertError);
-      return errorResponse("Failed to create submission", 500);
+    if (existingError) {
+      console.error("Existing request lookup error:", existingError);
+      return errorResponse("Unable to check for an existing request", 500);
     }
 
-    console.log("Submission created:", submission.id);
-
-    const modificationRows = modifications.map(
-      (mod: Record<string, unknown>) => ({
-        submission_id: submission.id,
+    const buildRows = (submissionId: string) =>
+      modifications.map((mod: Record<string, unknown>) => ({
+        submission_id: submissionId,
         round: roundKey,
         title: mod.title,
         activity_title: mod.activity_title,
@@ -202,33 +186,128 @@ serve(async (req) => {
         activity_status: mod.activity_status,
         is_new_line: Boolean(mod.is_new_line),
         current_expenditure: 0
-      })
-    );
+      }));
 
-    console.log("Inserting", modificationRows.length, "modifications");
+    let requestNumber: string;
+    const isResubmission = Boolean(existing);
 
-    const { error: modError } = await supabase
-      .from("submission_modifications")
-      .insert(modificationRows);
+    if (existing) {
+      requestNumber = existing.request_number;
 
-    if (modError) {
-      console.error("Modification insert error:", modError);
-      // Avoid leaving an orphaned submission without line items.
+      const { data: oldMods, error: oldModsError } = await supabase
+        .from("submission_modifications")
+        .select("*")
+        .eq("submission_id", existing.id);
+
+      if (oldModsError) {
+        console.error("Old modification lookup error:", oldModsError);
+        return errorResponse("Failed to load existing request", 500);
+      }
+
+      const { error: revisionError } = await supabase
+        .from("submission_revisions")
+        .insert({
+          submission_id: existing.id,
+          revision_no: existing.revision_no ?? 1,
+          status: existing.status,
+          justification: existing.justification,
+          admin_notes: existing.admin_notes,
+          modifications: oldMods ?? []
+        });
+
+      if (revisionError) {
+        console.error("Revision snapshot error:", revisionError);
+        return errorResponse("Failed to save request history", 500);
+      }
+
       await supabase
-        .from("budget_submissions")
+        .from("submission_modifications")
         .delete()
-        .eq("id", submission.id);
-      return errorResponse("Failed to create modifications", 500);
-    }
+        .eq("submission_id", existing.id);
 
-    console.log("Modifications inserted successfully");
+      const { error: reinsertError } = await supabase
+        .from("submission_modifications")
+        .insert(buildRows(existing.id));
+
+      if (reinsertError) {
+        console.error("Modification replace error:", reinsertError);
+        // Restore the previous line items.
+        if (oldMods && oldMods.length) {
+          await supabase.from("submission_modifications").insert(oldMods);
+        }
+        return errorResponse("Failed to update modifications", 500);
+      }
+
+      const { error: updateError } = await supabase
+        .from("budget_submissions")
+        .update({
+          requester_name: requesterName,
+          requester_email: requesterEmail,
+          justification: justification,
+          status: "Pending",
+          admin_notes: null,
+          reviewed_at: null,
+          revision_no: (existing.revision_no ?? 1) + 1,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", existing.id);
+
+      if (updateError) {
+        console.error("Submission update error:", updateError);
+        return errorResponse("Failed to update request", 500);
+      }
+    } else {
+      requestNumber =
+        "REQ-" +
+        Array.from(crypto.getRandomValues(new Uint8Array(4)))
+          .map((b: number) => b.toString(16).padStart(2, "0"))
+          .join("")
+          .toUpperCase();
+
+      console.log("Creating submission with request number:", requestNumber);
+
+      const { data: submission, error: insertError } =
+        await supabase
+          .from("budget_submissions")
+          .insert({
+            request_number: requestNumber,
+            requester_name: requesterName,
+            requester_email: requesterEmail,
+            institution: institution,
+            justification: justification,
+            round: roundKey,
+            status: "Pending"
+          })
+          .select()
+          .single();
+
+      if (insertError) {
+        console.error("Insert error:", insertError);
+        return errorResponse("Failed to create submission", 500);
+      }
+
+      const { error: modError } = await supabase
+        .from("submission_modifications")
+        .insert(buildRows(submission.id));
+
+      if (modError) {
+        console.error("Modification insert error:", modError);
+        // Avoid leaving an orphaned submission without line items.
+        await supabase
+          .from("budget_submissions")
+          .delete()
+          .eq("id", submission.id);
+        return errorResponse("Failed to create modifications", 500);
+      }
+    }
 
     console.log("Sending notification emails...");
     await sendEmails(
       requesterName,
       requesterEmail,
       institution,
-      requestNumber
+      requestNumber,
+      isResubmission
     );
 
     console.log("Returning success response");
@@ -236,7 +315,8 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         success: true,
-        request_number: requestNumber
+        request_number: requestNumber,
+        resubmitted: isResubmission
       }),
       { status: 200, headers: jsonHeaders }
     );
@@ -254,7 +334,8 @@ async function sendEmails(
   requesterName: string,
   requesterEmail: string,
   institution: string,
-  requestNumber: string
+  requestNumber: string,
+  isResubmission = false
 ) {
   if (!adminEmail || !adminEmail.includes("@")) {
     console.error("Invalid admin email:", adminEmail);
@@ -264,7 +345,7 @@ async function sendEmails(
   const adminLink = `${appBaseUrl}admin.html`;
 
   const adminEmailBody = `
-    <h2>Budget Request Submitted</h2>
+    <h2>Budget Request ${isResubmission ? "Resubmitted" : "Submitted"}</h2>
     <p><strong>Request ID:</strong> ${escapeHtml(requestNumber)}</p>
     <p><strong>Requester:</strong> ${escapeHtml(requesterName)}</p>
     <p><strong>Email:</strong> ${escapeHtml(requesterEmail)}</p>
@@ -273,9 +354,9 @@ async function sendEmails(
   `;
 
   const requesterEmailBody = `
-    <h2>Budget Request Received</h2>
+    <h2>Budget Request ${isResubmission ? "Resubmission Received" : "Received"}</h2>
     <p>Dear ${escapeHtml(requesterName)},</p>
-    <p>Your budget request has been submitted and is pending review.</p>
+    <p>Your budget request has been ${isResubmission ? "resubmitted" : "submitted"} and is pending review.</p>
     <p><strong>Request ID:</strong> ${escapeHtml(requestNumber)}</p>
     <p>You will receive an email notification when your request has been reviewed.</p>
     <p>If you have any questions, please contact your administrator.</p>
@@ -293,7 +374,7 @@ async function sendEmails(
       body: JSON.stringify({
         from: "noreply@desertcolleges.org",
         to: adminEmail.trim(),
-        subject: `Budget Request: ${requestNumber}`,
+        subject: `Budget Request${isResubmission ? " Resubmitted" : ""}: ${requestNumber}`,
         html: adminEmailBody
       })
     });
@@ -314,7 +395,7 @@ async function sendEmails(
         body: JSON.stringify({
           from: "noreply@desertcolleges.org",
           to: requesterEmail.trim(),
-          subject: `Budget Request Received: ${requestNumber}`,
+          subject: `Budget Request ${isResubmission ? "Resubmission Received" : "Received"}: ${requestNumber}`,
           html: requesterEmailBody
         })
       }

@@ -14,7 +14,17 @@ Budget modification request tool for Regional Strong Workforce.
 - Email function source is in `SEND_APPROVAL_EDGE_FUNCTION.ts`; deploy it as Supabase Edge Function `send-approval`.
 - Apply `DATABASE_SETUP.sql` in Supabase SQL Editor to provision normalized submission modification fields, indexes, and status lookup RPC.
 
+- Data model is standalone: the app reads/writes only its own Supabase tables. After an Approved request, update the external budget system manually, then click **Mark as Finalized** in Admin.
+- One open request (Pending/Approved/Rejected) per institution + round. Requesters edit and resubmit it (status returns to Pending; the prior version is saved in `submission_revisions`). Only **Finalized** allows a fresh request.
+- Requesters see a **Modification History** tab per round; admins can delete requests (`admin_delete_submission`).
+- Redeploy **both** edge functions (`send-approval`, `submit-budget`) and re-run `DATABASE_SETUP.sql` after pulling these changes. `send-approval` must allow the `apikey` CORS header or admin notifications silently fail in the browser.
+
 ## Manual testing checklist
+
+- [ ] Reject a request: admin sees "notification email sent" (or an explicit warning) and the requester receives the email.
+- [ ] Resubmit a Pending/Approved/Rejected request: same request number, status returns to Pending, History tab shows it.
+- [ ] Mark Approved request Finalized; requester can then start a new request from scratch.
+- [ ] Admin review shows Project → Activity → category grouping with changes highlighted; Delete works.
 
 - [ ] Load a round with multiple projects, including projects with and without activities.
 - [ ] Add a new activity to an empty project section.
