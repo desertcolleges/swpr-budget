@@ -693,6 +693,9 @@ begin
 
   perform set_config('app.finalizing', 'off', true);
 
+  delete from public.budget_round_resets
+  where lower(institution) = lower(s.institution) and upper(round) = upper(s.round);
+
   update public.budget_submissions
   set status = 'Finalized', finalized_at = now(), updated_at = now()
   where id = p_id;
@@ -711,9 +714,22 @@ grant execute on function public.admin_finalize_submission(uuid) to authenticate
 -- Imported rows without a round also get round filled in from the title.
 -- ---------------------------------------------------------------------------
 
+-- Rounds an admin has reset; imports for these institution + rounds are skipped until a budget is finalized.
+create table if not exists public.budget_round_resets (
+  institution text not null,
+  round text not null,
+  reset_at timestamptz not null default now(),
+  reset_by uuid,
+  primary key (institution, round)
+);
+
+alter table public.budget_round_resets enable row level security;
+
 create or replace function public.guard_budget_reference_write()
 returns trigger
 language plpgsql
+security definer
+set search_path = public
 as $$
 declare
   v_round text;
@@ -730,11 +746,18 @@ begin
 
     if new.sync_batch not like 'finalized:%'
        and v_round is not null
-       and exists (
-         select 1 from public.budget_reference b
-         where b.sync_batch like 'finalized:%'
-           and lower(b.institution) = lower(new.institution)
-           and upper(b.round) = v_round
+       and (
+         exists (
+           select 1 from public.budget_reference b
+           where b.sync_batch like 'finalized:%'
+             and lower(b.institution) = lower(new.institution)
+             and upper(b.round) = v_round
+         )
+         or exists (
+           select 1 from public.budget_round_resets r
+           where lower(r.institution) = lower(new.institution)
+             and upper(r.round) = v_round
+         )
        ) then
       return null;
     end if;
@@ -775,3 +798,48 @@ drop trigger if exists trg_guard_budget_reference_truncate on public.budget_refe
 create trigger trg_guard_budget_reference_truncate
 before truncate on public.budget_reference
 for each statement execute function public.guard_budget_reference_truncate();
+
+-- ---------------------------------------------------------------------------
+-- Admin reset of a college's budget for a round. Removes the budget so the
+-- requester must build a new one (like a new allocation). Open requests are
+-- closed with status 'Reset'; all requests and revisions stay in history.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.admin_reset_budget(p_institution text, p_round text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_round text := upper(trim(p_round));
+begin
+  if not exists (select 1 from public.admin_users a where a.user_id = auth.uid() and a.active = true) then
+    raise exception 'Not authorized';
+  end if;
+
+  perform set_config('app.finalizing', 'on', true);
+
+  delete from public.budget_reference
+  where lower(institution) = lower(trim(p_institution))
+    and (
+      upper(round) = v_round
+      or (round is null and upper(title) ~ ('\m' || v_round || '\M'))
+    );
+
+  perform set_config('app.finalizing', 'off', true);
+
+  update public.budget_submissions
+  set status = 'Reset', updated_at = now()
+  where lower(institution) = lower(trim(p_institution))
+    and upper(round) = v_round
+    and status in ('Pending', 'Approved', 'Rejected');
+
+  insert into public.budget_round_resets (institution, round, reset_by)
+  values (trim(p_institution), v_round, auth.uid())
+  on conflict (institution, round) do update set reset_at = now(), reset_by = auth.uid();
+end;
+$$;
+
+revoke all on function public.admin_reset_budget(text, text) from public;
+grant execute on function public.admin_reset_budget(text, text) to authenticated;
