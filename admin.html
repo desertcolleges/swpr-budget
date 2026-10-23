@@ -31,13 +31,8 @@
 
       <section id="loginSection" class="card">
         <h2>Administrator Login</h2>
-        <form id="loginForm">
-          <label for="loginEmail">Email Address</label>
-          <input id="loginEmail" type="email" required autocomplete="email" />
-          <label for="loginPassword">Password</label>
-          <input id="loginPassword" type="password" required autocomplete="current-password" />
-          <button class="button primary" type="submit">Sign In</button>
-        </form>
+        <p>Sign in with your @desertcolleges.org Google account.</p>
+        <button id="googleSignInButton" class="button primary" type="button">Sign in with Google</button>
       </section>
 
       <section id="adminSection" class="hidden">
@@ -49,7 +44,120 @@
           <button id="logoutButton" class="button secondary">Sign Out</button>
         </div>
 
-        <div class="card">
+        <nav id="adminTabs" class="tabs" role="tablist" aria-label="Admin sections">
+          <button class="tab-button" role="tab" data-tab="admins" type="button">Admins</button>
+          <button class="tab-button" role="tab" data-tab="allocations" type="button">Allocations</button>
+          <button class="tab-button" role="tab" data-tab="institutions" type="button">Institutions</button>
+          <button class="tab-button" role="tab" data-tab="projects" type="button">Projects</button>
+          <button class="tab-button" role="tab" data-tab="requests" type="button">Requests</button>
+          <button class="tab-button" role="tab" data-tab="rounds" type="button">Rounds</button>
+        </nav>
+
+        <div class="tab-panel hidden" id="tab-admins">
+          <div class="card">
+            <h3>Admin Users</h3>
+            <p>Only active @desertcolleges.org accounts listed here can sign in with Google.</p>
+            <form id="adminForm" class="activity-controls">
+              <div>
+                <label for="adminName">Name</label>
+                <input id="adminName" type="text" required />
+              </div>
+              <div>
+                <label for="adminEmail">Email</label>
+                <input id="adminEmail" type="email" placeholder="name@desertcolleges.org" required />
+              </div>
+              <button class="button primary" type="submit">Add Admin</button>
+            </form>
+            <div id="adminList" class="table-wrapper"></div>
+          </div>
+        </div>
+
+        <div class="tab-panel hidden" id="tab-allocations">
+          <div class="card" id="allocationCard">
+          <h3>College Allocations</h3>
+          <form id="allocationForm" class="activity-controls">
+            <div>
+              <label for="allocationInstitution">College</label>
+              <select id="allocationInstitution" required></select>
+            </div>
+            <div>
+              <label for="allocationRound">Round</label>
+              <select id="allocationRound" required></select>
+            </div>
+            <div>
+              <label for="allocationAmount">Allocation ($)</label>
+              <input id="allocationAmount" type="number" min="0" step="1" required />
+            </div>
+            <button class="button primary" type="submit">Save Allocation</button>
+          </form>
+          <div id="allocationRoundTabs" class="tabs sub-tabs" role="tablist" aria-label="Allocation rounds"></div>
+          <div id="allocationList" class="table-wrapper"></div>
+        </div>
+        </div>
+
+        <div class="tab-panel hidden" id="tab-institutions">
+          <div class="card" id="institutionCard">
+          <h3>Institutions</h3>
+          <form id="institutionForm" class="activity-controls">
+            <div>
+              <label for="institutionName">Institution name</label>
+              <input id="institutionName" type="text" required />
+            </div>
+            <button class="button primary" type="submit">Add Institution</button>
+          </form>
+          <div id="institutionList" class="table-wrapper"></div>
+        </div>
+        </div>
+
+        <div class="tab-panel hidden" id="tab-projects">
+          <div class="card">
+            <h3>Projects</h3>
+            <p>Each project belongs to one round and has its own activities. Copy a project to reuse its activities in another round.</p>
+            <form id="projectForm" class="activity-controls">
+              <div>
+                <label for="projectName">Project name</label>
+                <input id="projectName" type="text" required />
+              </div>
+              <div>
+                <label for="projectRound">Round</label>
+                <select id="projectRound" required></select>
+              </div>
+              <button id="projectSubmitButton" class="button primary" type="submit">Add Project</button>
+              <button id="projectCancelButton" class="button secondary hidden" type="button">Cancel Edit</button>
+            </form>
+            <div id="projectRoundTabs" class="tabs sub-tabs" role="tablist" aria-label="Project rounds"></div>
+            <div id="projectList" class="table-wrapper"></div>
+          </div>
+          <div class="card hidden" id="projectActivitiesCard">
+            <h3>Activities for <span id="projectActivitiesTitle"></span></h3>
+            <form id="projectActivityForm" class="activity-controls">
+              <div>
+                <label for="projectActivityName">Activity name</label>
+                <input id="projectActivityName" type="text" required />
+              </div>
+              <button class="button primary" type="submit">Add Activity</button>
+              <button id="closeProjectActivitiesButton" class="button secondary" type="button">Close</button>
+            </form>
+            <div id="projectActivityList" class="table-wrapper"></div>
+          </div>
+        </div>
+
+        <div class="tab-panel hidden" id="tab-requests">
+          <div class="card">
+          <label for="statusFilter">Filter by status</label>
+          <select id="statusFilter">
+            <option value="">All Requests</option>
+            <option value="Pending">Pending</option>
+            <option value="Approved">Approved</option>
+            <option value="Rejected">Rejected</option>
+          </select>
+        </div>
+
+        <div id="requestList" class="table-wrapper"></div>
+        </div>
+
+        <div class="tab-panel hidden" id="tab-rounds">
+          <div class="card">
           <h3>Requester Round Visibility</h3>
           <p>Select the rounds visible to requesters.</p>
           <form id="roundSettingsForm">
@@ -68,69 +176,7 @@
             <button class="button secondary" type="submit">Add Round</button>
           </form>
         </div>
-
-        <div class="card" id="institutionCard">
-          <h3>Institutions</h3>
-          <form id="institutionForm" class="activity-controls">
-            <div>
-              <label for="institutionName">Institution name</label>
-              <input id="institutionName" type="text" required />
-            </div>
-            <button class="button primary" type="submit">Add Institution</button>
-          </form>
-          <div id="institutionList" class="table-wrapper"></div>
         </div>
-
-        <div class="card" id="allocationCard">
-          <h3>College Allocations</h3>
-          <form id="allocationForm" class="activity-controls">
-            <div>
-              <label for="allocationInstitution">College</label>
-              <select id="allocationInstitution" required></select>
-            </div>
-            <div>
-              <label for="allocationRound">Round</label>
-              <select id="allocationRound" required></select>
-            </div>
-            <div>
-              <label for="allocationAmount">Allocation ($)</label>
-              <input id="allocationAmount" type="number" min="0" step="1" required />
-            </div>
-            <button class="button primary" type="submit">Save Allocation</button>
-          </form>
-          <div id="allocationList" class="table-wrapper"></div>
-        </div>
-
-        <div class="card" id="activityManagementCard">
-          <h3>Activity Management</h3>
-          <p id="activityManagementPlaceholderText">
-            Define approved activities requesters can add. Leave project blank to make an activity available to all projects.
-          </p>
-          <form id="activityForm" class="activity-controls">
-            <div>
-              <label for="activityProject">Project (optional)</label>
-              <input id="activityProject" type="text" />
-            </div>
-            <div>
-              <label for="activityName">Activity name</label>
-              <input id="activityName" type="text" required />
-            </div>
-            <button class="button primary" type="submit">Add Activity</button>
-          </form>
-          <div id="activityList" class="table-wrapper"></div>
-        </div>
-
-        <div class="card">
-          <label for="statusFilter">Filter by status</label>
-          <select id="statusFilter">
-            <option value="">All Requests</option>
-            <option value="Pending">Pending</option>
-            <option value="Approved">Approved</option>
-            <option value="Rejected">Rejected</option>
-          </select>
-        </div>
-
-        <div id="requestList" class="table-wrapper"></div>
       </section>
 
       <section id="reviewSection" class="hidden">

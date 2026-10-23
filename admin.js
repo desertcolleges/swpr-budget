@@ -16,7 +16,8 @@ function getAllRounds() {
     ...BASE_ROUNDS,
     ...state.extraRounds,
     ...state.visibleRounds,
-    ...state.allocations.map(row => row.round)
+    ...state.allocations.map(row => row.round),
+    ...state.projects.map(project => project.round).filter(Boolean)
   ])).sort(sortRound);
 }
 
@@ -28,13 +29,50 @@ const state = {
   allocations: [],
   institutions: [],
   institutionRows: [],
-  activities: []
+  projects: [],
+  projectRoundFilter: 'All',
+  activeProjectId: null,
+  editingProjectId: null,
+  allocationRoundFilter: 'All',
+  admins: [],
+  currentUserEmail: '',
+  activeTab: 'requests'
 };
+
+const ALLOWED_EMAIL_DOMAIN = '@desertcolleges.org';
 
 document.addEventListener('DOMContentLoaded', async () => {
   document
-    .getElementById('loginForm')
-    .addEventListener('submit', signIn);
+    .getElementById('googleSignInButton')
+    .addEventListener('click', signInWithGoogle);
+
+  document.getElementById('adminTabs').addEventListener('click', event => {
+    const button = event.target.closest('[data-tab]');
+    if (button) setActiveTab(button.dataset.tab);
+  });
+  document.getElementById('allocationRoundTabs').addEventListener('click', event => {
+    const button = event.target.closest('[data-round]');
+    if (!button) return;
+    state.allocationRoundFilter = button.dataset.round;
+    renderAllocations();
+  });
+  document.getElementById('projectRoundTabs').addEventListener('click', event => {
+    const button = event.target.closest('[data-round]');
+    if (!button) return;
+    state.projectRoundFilter = button.dataset.round;
+    renderProjects();
+  });
+  document.getElementById('projectForm').addEventListener('submit', saveProject);
+  document.getElementById('projectCancelButton').addEventListener('click', resetProjectForm);
+  document.getElementById('projectList').addEventListener('click', handleProjectClick);
+  document.getElementById('projectActivityForm').addEventListener('submit', addProjectActivity);
+  document.getElementById('projectActivityList').addEventListener('click', handleProjectActivityClick);
+  document.getElementById('closeProjectActivitiesButton').addEventListener('click', () => {
+    state.activeProjectId = null;
+    renderProjectActivities();
+  });
+  document.getElementById('adminForm').addEventListener('submit', addAdmin);
+  document.getElementById('adminList').addEventListener('click', handleAdminClick);
 
   document
     .getElementById('logoutButton')
@@ -64,9 +102,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('allocationForm').addEventListener('submit', saveAllocation);
   document.getElementById('institutionForm').addEventListener('submit', addInstitution);
   document.getElementById('institutionList').addEventListener('click', handleInstitutionClick);
-  document.getElementById('activityForm').addEventListener('submit', addActivity);
   document.getElementById('allocationList').addEventListener('click', handleAllocationClick);
-  document.getElementById('activityList').addEventListener('click', handleActivityClick);
 
   renderRoundSettings();
   await loadExistingSession();
@@ -82,19 +118,29 @@ async function loadExistingSession() {
   }
 
   if (data.session) {
-    const isAuthorized = await isAdminUser(data.session.user.id);
-
-    if (!isAuthorized) {
-      await supabaseClient.auth.signOut();
-      showMessage(
-        'This account does not have admin access.',
-        'error'
-      );
-      return;
-    }
-
-    await showAdminDashboard(data.session);
+    await authorizeSession(data.session);
   }
+}
+
+async function authorizeSession(session) {
+  const email = String(session.user.email || '').toLowerCase();
+  let authorized = false;
+
+  if (email.endsWith(ALLOWED_EMAIL_DOMAIN)) {
+    const { data: claimed } = await supabaseClient.rpc('claim_admin_access');
+    authorized = claimed === true && await isAdminUser(session.user.id);
+  }
+
+  if (!authorized) {
+    await supabaseClient.auth.signOut();
+    showMessage(
+      `${email || 'This account'} does not have admin access. Use an authorized ${ALLOWED_EMAIL_DOMAIN} account.`,
+      'error'
+    );
+    return;
+  }
+
+  await showAdminDashboard(session);
 }
 
 async function isAdminUser(userId) {
@@ -112,45 +158,34 @@ async function isAdminUser(userId) {
   return Array.isArray(data) && data.length > 0;
 }
 
-async function signIn(event) {
-  event.preventDefault();
-
-  const email =
-    document.getElementById('loginEmail').value.trim();
-
-  const password =
-    document.getElementById('loginPassword').value;
-
-  try {
-    showLoading(true);
-    clearMessage();
-
-    const { data, error } =
-      await supabaseClient.auth.signInWithPassword({
-        email,
-        password
-      });
-
-    if (error) throw error;
-
-    const isAuthorized = await isAdminUser(data.user.id);
-
-    if (!isAuthorized) {
-      await supabaseClient.auth.signOut();
-      throw new Error(
-        'This account does not have admin access.'
-      );
+async function signInWithGoogle() {
+  clearMessage();
+  const { error } = await supabaseClient.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: window.location.origin + window.location.pathname,
+      queryParams: { hd: ALLOWED_EMAIL_DOMAIN.slice(1), prompt: 'select_account' }
     }
+  });
 
-    await showAdminDashboard(data.session);
-  } catch (error) {
-    showMessage(
-      'Unable to sign in: ' + error.message,
-      'error'
-    );
-  } finally {
-    showLoading(false);
+  if (error) {
+    showMessage('Unable to start Google sign-in: ' + error.message, 'error');
   }
+}
+
+function setActiveTab(tab) {
+  const valid = ['admins', 'allocations', 'institutions', 'projects', 'requests', 'rounds'];
+  state.activeTab = valid.includes(tab) ? tab : 'requests';
+
+  document.querySelectorAll('#adminTabs .tab-button').forEach(button => {
+    const active = button.dataset.tab === state.activeTab;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+  document.querySelectorAll('.tab-panel').forEach(panel => {
+    panel.classList.toggle('hidden', panel.id !== `tab-${state.activeTab}`);
+  });
+  history.replaceState(null, '', `#${state.activeTab}`);
 }
 
 async function showAdminDashboard(session) {
@@ -166,14 +201,18 @@ async function showAdminDashboard(session) {
     .getElementById('adminSection')
     .classList.remove('hidden');
 
+  state.currentUserEmail = String(session.user.email || '').toLowerCase();
   document.getElementById('signedInUser').textContent =
     `Signed in as ${session.user.email}`;
+
+  setActiveTab(window.location.hash.slice(1) || state.activeTab);
 
   await Promise.all([
     loadRequests(),
     loadRoundSettings(),
-    loadActivityManagement(),
-    loadAllocations()
+    loadAllocations(),
+    loadProjects(),
+    loadAdmins()
   ]);
 }
 
@@ -702,6 +741,7 @@ function addRound(event) {
   ).map(i => i.value);
   renderRoundSettings();
   renderAllocationForm();
+  renderProjectForm();
   input.value = '';
   showMessage(`${round} added. Select it and save round settings to make it visible.`, 'success');
 }
@@ -722,7 +762,8 @@ async function loadAllocations() {
     if (instResult.error) throw instResult.error;
     if (allocResult.error) throw allocResult.error;
 
-    state.institutionRows = instResult.data || [];
+    state.institutionRows = (instResult.data || [])
+      .sort((a, b) => a.name.localeCompare(b.name));
     state.institutions = state.institutionRows
       .filter(row => row.is_active)
       .map(row => row.name);
@@ -733,6 +774,7 @@ async function loadAllocations() {
 
     renderRoundSettings();
     renderAllocationForm();
+    renderProjectForm();
     renderAllocations();
     renderInstitutions();
   } catch (error) {
@@ -764,13 +806,23 @@ function renderAllocations() {
   const container = document.getElementById('allocationList');
 
   if (!state.allocations.length) {
+    document.getElementById('allocationRoundTabs').innerHTML = '';
     container.innerHTML = '<p>No allocations set.</p>';
     return;
   }
 
-  const rows = [...state.allocations].sort((a, b) =>
-    a.institution.localeCompare(b.institution) || sortRound(a.round, b.round)
-  );
+  const rounds = Array.from(new Set(state.allocations.map(row => row.round))).sort(sortRound);
+  if (state.allocationRoundFilter !== 'All' && !rounds.includes(state.allocationRoundFilter)) {
+    state.allocationRoundFilter = 'All';
+  }
+  document.getElementById('allocationRoundTabs').innerHTML =
+    renderRoundTabs(rounds, state.allocationRoundFilter);
+
+  const rows = state.allocations
+    .filter(row => state.allocationRoundFilter === 'All' || row.round === state.allocationRoundFilter)
+    .sort((a, b) =>
+      a.institution.localeCompare(b.institution) || sortRound(a.round, b.round)
+    );
 
   container.innerHTML = `
     <table>
@@ -951,78 +1003,277 @@ async function handleInstitutionClick(event) {
   }
 }
 
-async function loadActivityManagement() {
+function renderRoundTabs(rounds, active) {
+  return ['All', ...rounds].map(round => `
+    <button class="tab-button ${round === active ? 'active' : ''}" type="button" role="tab" data-round="${escapeAttribute(round)}">${escapeHtml(round)}</button>
+  `).join('');
+}
+
+// ---------- Projects ----------
+
+async function loadProjects() {
   try {
     const { data, error } = await supabaseClient
-      .from('activity_management')
-      .select('id, project_title, activity_name, is_active')
-      .order('project_title')
-      .order('activity_name');
+      .from('projects')
+      .select('id, name, round, is_active, project_activities(id, activity_name)');
 
     if (error) throw error;
 
-    state.activities = data || [];
-    renderActivities();
+    state.projects = (data || []).map(project => ({
+      ...project,
+      project_activities: (project.project_activities || [])
+        .sort((a, b) => a.activity_name.localeCompare(b.activity_name))
+    })).sort((a, b) => a.name.localeCompare(b.name));
+
+    renderProjectForm();
+    renderProjects();
   } catch (error) {
     showMessage(
-      'Unable to load activity management: ' + String(error?.message || '') + ' (apply DATABASE_SETUP.sql)',
+      'Unable to load projects: ' + String(error?.message || '') + ' (apply DATABASE_SETUP.sql)',
       'error'
     );
   }
 }
 
-function renderActivities() {
-  const container = document.getElementById('activityList');
+function renderProjectForm() {
+  const select = document.getElementById('projectRound');
+  const current = select.value;
+  select.innerHTML = '<option value="">Select round</option>' + getAllRounds()
+    .map(round => `<option value="${round}">${round}</option>`)
+    .join('');
+  select.value = current;
+}
 
-  if (!state.activities.length) {
-    container.innerHTML = '<p>No activities set up yet.</p>';
+function resetProjectForm() {
+  state.editingProjectId = null;
+  document.getElementById('projectForm').reset();
+  document.getElementById('projectSubmitButton').textContent = 'Add Project';
+  document.getElementById('projectCancelButton').classList.add('hidden');
+}
+
+function renderProjects() {
+  const container = document.getElementById('projectList');
+  const rounds = Array.from(new Set(state.projects.map(p => p.round || 'Unassigned')))
+    .sort((a, b) => (a === 'Unassigned') - (b === 'Unassigned') || sortRound(a, b));
+
+  if (state.projectRoundFilter !== 'All' && !rounds.includes(state.projectRoundFilter)) {
+    state.projectRoundFilter = 'All';
+  }
+  document.getElementById('projectRoundTabs').innerHTML =
+    state.projects.length ? renderRoundTabs(rounds, state.projectRoundFilter) : '';
+
+  const rows = state.projects.filter(p =>
+    state.projectRoundFilter === 'All' || (p.round || 'Unassigned') === state.projectRoundFilter
+  );
+
+  if (!rows.length) {
+    container.innerHTML = '<p>No projects set up yet.</p>';
+  } else {
+    container.innerHTML = `
+      <table>
+        <thead><tr><th>Project</th><th>Round</th><th>Activities</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          ${rows.map(row => `
+            <tr>
+              <td>${escapeHtml(row.name)}</td>
+              <td>${escapeHtml(row.round || 'Unassigned')}</td>
+              <td>${row.project_activities.length}</td>
+              <td>${row.is_active ? 'Active' : 'Inactive'}</td>
+              <td>
+                <button class="button primary small-button" type="button" data-action="activities" data-id="${escapeAttribute(row.id)}">Activities</button>
+                <button class="button secondary small-button" type="button" data-action="edit" data-id="${escapeAttribute(row.id)}">Edit</button>
+                <button class="button secondary small-button" type="button" data-action="copy" data-id="${escapeAttribute(row.id)}">Copy</button>
+                <button class="button secondary small-button" type="button" data-action="toggle" data-id="${escapeAttribute(row.id)}">${row.is_active ? 'Deactivate' : 'Activate'}</button>
+                <button class="button danger small-button" type="button" data-action="delete" data-id="${escapeAttribute(row.id)}">Delete</button>
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+  }
+
+  renderProjectActivities();
+}
+
+function renderProjectActivities() {
+  const card = document.getElementById('projectActivitiesCard');
+  const project = state.projects.find(p => p.id === state.activeProjectId);
+
+  if (!project) {
+    card.classList.add('hidden');
     return;
   }
 
-  container.innerHTML = `
-    <table>
-      <thead><tr><th>Project</th><th>Activity</th><th>Status</th><th></th></tr></thead>
-      <tbody>
-        ${state.activities.map(row => `
-          <tr>
-            <td>${escapeHtml(row.project_title || 'All projects')}</td>
-            <td>${escapeHtml(row.activity_name)}</td>
-            <td>${row.is_active ? 'Active' : 'Inactive'}</td>
-            <td>
-              <button class="button secondary small-button" type="button" data-action="toggle-activity" data-id="${escapeAttribute(row.id)}">${row.is_active ? 'Deactivate' : 'Activate'}</button>
-              <button class="button danger small-button" type="button" data-action="delete-activity" data-id="${escapeAttribute(row.id)}">Delete</button>
-            </td>
-          </tr>`).join('')}
-      </tbody>
-    </table>`;
+  card.classList.remove('hidden');
+  document.getElementById('projectActivitiesTitle').textContent =
+    `${project.name}${project.round ? ` (${project.round})` : ''}`;
+
+  document.getElementById('projectActivityList').innerHTML = project.project_activities.length
+    ? `<table>
+        <thead><tr><th>Activity</th><th></th></tr></thead>
+        <tbody>
+          ${project.project_activities.map(row => `
+            <tr>
+              <td>${escapeHtml(row.activity_name)}</td>
+              <td>
+                <button class="button secondary small-button" type="button" data-action="rename-activity" data-id="${escapeAttribute(row.id)}">Rename</button>
+                <button class="button danger small-button" type="button" data-action="delete-activity" data-id="${escapeAttribute(row.id)}">Delete</button>
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`
+    : '<p>No activities yet.</p>';
 }
 
-async function addActivity(event) {
+function isDuplicateProjectName(name, exceptId) {
+  return state.projects.some(p =>
+    p.id !== exceptId && p.name.toLowerCase() === name.toLowerCase()
+  );
+}
+
+async function saveProject(event) {
   event.preventDefault();
 
-  const project = document.getElementById('activityProject').value.trim();
-  const name = document.getElementById('activityName').value.trim();
+  const name = document.getElementById('projectName').value.trim();
+  const round = document.getElementById('projectRound').value;
 
-  if (!name) {
-    showMessage('Enter an activity name.', 'error');
+  if (!name || !round) {
+    showMessage('Enter a project name and select a round.', 'error');
+    return;
+  }
+  if (isDuplicateProjectName(name, state.editingProjectId)) {
+    showMessage(`A project named ${name} already exists.`, 'error');
+    return;
+  }
+
+  try {
+    showLoading(true);
+    const payload = { name, round, updated_at: new Date().toISOString() };
+    const { error } = state.editingProjectId
+      ? await supabaseClient.from('projects').update(payload).eq('id', state.editingProjectId)
+      : await supabaseClient.from('projects').insert({ name, round });
+
+    if (error) throw error;
+
+    resetProjectForm();
+    await loadProjects();
+    showMessage('Project saved.', 'success');
+  } catch (error) {
+    showMessage('Unable to save project: ' + error.message, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function handleProjectClick(event) {
+  const button = event.target.closest('[data-action]');
+  if (!button) return;
+
+  const project = state.projects.find(p => p.id === button.dataset.id);
+  if (!project) return;
+
+  try {
+    switch (button.dataset.action) {
+      case 'activities':
+        state.activeProjectId = project.id;
+        renderProjectActivities();
+        document.getElementById('projectActivitiesCard').scrollIntoView({ behavior: 'smooth' });
+        return;
+
+      case 'edit':
+        state.editingProjectId = project.id;
+        document.getElementById('projectName').value = project.name;
+        document.getElementById('projectRound').value = project.round || '';
+        document.getElementById('projectSubmitButton').textContent = 'Save Project';
+        document.getElementById('projectCancelButton').classList.remove('hidden');
+        document.getElementById('projectName').focus();
+        return;
+
+      case 'copy': {
+        const newName = (prompt('Name for the copy:', project.name) || '').trim();
+        if (!newName) return;
+        if (isDuplicateProjectName(newName, null)) {
+          showMessage(`A project named ${newName} already exists.`, 'error');
+          return;
+        }
+        const roundInput = (prompt(
+          `Round for ${newName} (e.g. R11). Available: ${getAllRounds().join(', ')}`,
+          project.round || ''
+        ) || '').trim();
+        const newRound = inferRound(roundInput);
+        if (!newRound) {
+          showMessage('Enter a valid round such as R11.', 'error');
+          return;
+        }
+        showLoading(true);
+        const { error } = await supabaseClient.rpc('copy_project', {
+          p_source: project.id,
+          p_name: newName,
+          p_round: newRound
+        });
+        if (error) throw error;
+        state.projectRoundFilter = 'All';
+        showMessage(`Copied ${project.name} to ${newName} (${newRound}).`, 'success');
+        break;
+      }
+
+      case 'toggle': {
+        showLoading(true);
+        const { error } = await supabaseClient
+          .from('projects')
+          .update({ is_active: !project.is_active, updated_at: new Date().toISOString() })
+          .eq('id', project.id);
+        if (error) throw error;
+        break;
+      }
+
+      case 'delete': {
+        showLoading(true);
+        const { count, error: usageError } = await supabaseClient
+          .from('submission_modifications')
+          .select('id', { count: 'exact', head: true })
+          .eq('title', project.name);
+        if (usageError) throw usageError;
+        showLoading(false);
+        if (count > 0) {
+          showMessage(`${project.name} is used by ${count} existing request line(s). Deactivate it instead.`, 'error');
+          return;
+        }
+        if (!confirm(`Delete ${project.name} and its activities? This cannot be undone.`)) return;
+        showLoading(true);
+        const { error } = await supabaseClient.from('projects').delete().eq('id', project.id);
+        if (error) throw error;
+        if (state.activeProjectId === project.id) state.activeProjectId = null;
+        break;
+      }
+    }
+    await loadProjects();
+  } catch (error) {
+    showMessage('Unable to update project: ' + error.message, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function addProjectActivity(event) {
+  event.preventDefault();
+  const input = document.getElementById('projectActivityName');
+  const name = input.value.trim();
+  const project = state.projects.find(p => p.id === state.activeProjectId);
+  if (!project || !name) return;
+
+  if (project.project_activities.some(a => a.activity_name.toLowerCase() === name.toLowerCase())) {
+    showMessage('That activity already exists for this project.', 'error');
     return;
   }
 
   try {
     showLoading(true);
     const { error } = await supabaseClient
-      .from('activity_management')
-      .insert({
-        project_title: project || null,
-        activity_name: name,
-        is_active: true
-      });
-
+      .from('project_activities')
+      .insert({ project_id: project.id, activity_name: name });
     if (error) throw error;
-
-    document.getElementById('activityName').value = '';
-    await loadActivityManagement();
-    showMessage('Activity added.', 'success');
+    input.value = '';
+    await loadProjects();
   } catch (error) {
     showMessage('Unable to add activity: ' + error.message, 'error');
   } finally {
@@ -1030,27 +1281,157 @@ async function addActivity(event) {
   }
 }
 
-async function handleActivityClick(event) {
+async function handleProjectActivityClick(event) {
   const button = event.target.closest('[data-action]');
   if (!button) return;
 
-  const row = state.activities.find(r => String(r.id) === button.dataset.id);
-  if (!row) return;
+  const project = state.projects.find(p => p.id === state.activeProjectId);
+  const activity = project?.project_activities.find(a => a.id === button.dataset.id);
+  if (!activity) return;
+
+  try {
+    if (button.dataset.action === 'rename-activity') {
+      const newName = (prompt('New activity name:', activity.activity_name) || '').trim();
+      if (!newName || newName === activity.activity_name) return;
+      if (project.project_activities.some(a => a.id !== activity.id && a.activity_name.toLowerCase() === newName.toLowerCase())) {
+        showMessage('That activity already exists for this project.', 'error');
+        return;
+      }
+      showLoading(true);
+      const { error } = await supabaseClient
+        .from('project_activities')
+        .update({ activity_name: newName })
+        .eq('id', activity.id);
+      if (error) throw error;
+    } else {
+      if (!confirm(`Delete activity "${activity.activity_name}"?`)) return;
+      showLoading(true);
+      const { error } = await supabaseClient
+        .from('project_activities')
+        .delete()
+        .eq('id', activity.id);
+      if (error) throw error;
+    }
+    await loadProjects();
+  } catch (error) {
+    showMessage('Unable to update activity: ' + error.message, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+// ---------- Admin users ----------
+
+async function loadAdmins() {
+  try {
+    const { data, error } = await supabaseClient
+      .from('admin_allowlist')
+      .select('email, display_name, active');
+
+    if (error) throw error;
+
+    state.admins = (data || []).sort((a, b) =>
+      (a.display_name || a.email).localeCompare(b.display_name || b.email)
+    );
+    renderAdmins();
+  } catch (error) {
+    showMessage(
+      'Unable to load admin users: ' + String(error?.message || '') + ' (apply DATABASE_SETUP.sql)',
+      'error'
+    );
+  }
+}
+
+function renderAdmins() {
+  const container = document.getElementById('adminList');
+
+  if (!state.admins.length) {
+    container.innerHTML = '<p>No admin users.</p>';
+    return;
+  }
+
+  container.innerHTML = `
+    <table>
+      <thead><tr><th>Name</th><th>Email</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        ${state.admins.map(row => `
+          <tr>
+            <td>${escapeHtml(row.display_name)}</td>
+            <td>${escapeHtml(row.email)}</td>
+            <td>${row.active ? 'Active' : 'Inactive'}</td>
+            <td>
+              <button class="button secondary small-button" type="button" data-action="rename-admin" data-email="${escapeAttribute(row.email)}">Edit Name</button>
+              <button class="button secondary small-button" type="button" data-action="toggle-admin" data-email="${escapeAttribute(row.email)}">${row.active ? 'Deactivate' : 'Activate'}</button>
+              <button class="button danger small-button" type="button" data-action="delete-admin" data-email="${escapeAttribute(row.email)}">Delete</button>
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+async function addAdmin(event) {
+  event.preventDefault();
+
+  const name = document.getElementById('adminName').value.trim();
+  const email = document.getElementById('adminEmail').value.trim().toLowerCase();
+
+  if (!email.endsWith(ALLOWED_EMAIL_DOMAIN)) {
+    showMessage(`Admin email must end with ${ALLOWED_EMAIL_DOMAIN}.`, 'error');
+    return;
+  }
 
   try {
     showLoading(true);
-
-    const query = supabaseClient.from('activity_management');
-    const { error } = button.dataset.action === 'toggle-activity'
-      ? await query
-          .update({ is_active: !row.is_active, updated_at: new Date().toISOString() })
-          .eq('id', row.id)
-      : await query.delete().eq('id', row.id);
-
+    const { error } = await supabaseClient
+      .from('admin_allowlist')
+      .insert({ email, display_name: name });
     if (error) throw error;
-    await loadActivityManagement();
+    document.getElementById('adminForm').reset();
+    await loadAdmins();
+    showMessage('Admin added. They can now sign in with Google.', 'success');
   } catch (error) {
-    showMessage('Unable to update activity: ' + error.message, 'error');
+    showMessage('Unable to add admin: ' + error.message, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function handleAdminClick(event) {
+  const button = event.target.closest('[data-action]');
+  if (!button) return;
+
+  const row = state.admins.find(a => a.email === button.dataset.email);
+  if (!row) return;
+
+  const isSelf = row.email === state.currentUserEmail;
+  const action = button.dataset.action;
+
+  if (isSelf && action !== 'rename-admin') {
+    showMessage('You cannot deactivate or delete your own admin access.', 'error');
+    return;
+  }
+
+  try {
+    const table = supabaseClient.from('admin_allowlist');
+    if (action === 'rename-admin') {
+      const newName = prompt('Admin name:', row.display_name);
+      if (newName === null) return;
+      showLoading(true);
+      const { error } = await table.update({ display_name: newName.trim() }).eq('email', row.email);
+      if (error) throw error;
+    } else if (action === 'toggle-admin') {
+      showLoading(true);
+      const { error } = await table.update({ active: !row.active }).eq('email', row.email);
+      if (error) throw error;
+    } else if (action === 'delete-admin') {
+      if (!confirm(`Remove ${row.email} from admin access?`)) return;
+      showLoading(true);
+      const { error } = await table.delete().eq('email', row.email);
+      if (error) throw error;
+    }
+    await loadAdmins();
+  } catch (error) {
+    showMessage('Unable to update admin: ' + error.message, 'error');
   } finally {
     showLoading(false);
   }
@@ -1071,7 +1452,6 @@ async function signOut() {
     .getElementById('loginSection')
     .classList.remove('hidden');
 
-  document.getElementById('loginForm').reset();
 }
 
 function inferRound(value) {

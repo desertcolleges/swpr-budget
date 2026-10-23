@@ -225,16 +225,25 @@ async function loadManagedActivities() {
   state.managedActivities = [];
 
   const { data, error } = await supabaseClient
-    .from('activity_management')
-    .select('project_title, activity_name')
+    .from('projects')
+    .select('name, round, project_activities(activity_name)')
     .eq('is_active', true);
 
   if (error) return;
 
-  state.managedActivities = (data || []).map(row => ({
-    project: String(row.project_title || '').trim(),
-    activity: String(row.activity_name || '').trim()
-  })).filter(row => row.activity);
+  (data || []).forEach(project => {
+    const name = String(project.name || '').trim();
+    const round = normalizeRoundToken(project.round);
+    if (!name) return;
+    const activities = (project.project_activities || [])
+      .map(row => String(row.activity_name || '').trim())
+      .filter(Boolean);
+    state.managedActivities.push({ project: name, round, activities });
+  });
+}
+
+function getManagedProjectsForRound(round) {
+  return state.managedActivities.filter(row => row.round === round);
 }
 
 function renderRoundSelection() {
@@ -528,7 +537,9 @@ function startNewBudget(round) {
 
 function getKnownProjects() {
   const names = new Set();
-  state.managedActivities.forEach(row => { if (row.project) names.add(row.project); });
+  const managed = getManagedProjectsForRound(state.selectedRound);
+  managed.forEach(row => names.add(row.project));
+  if (managed.length) return Array.from(names).sort((x, y) => x.localeCompare(y));
   state.budgetRows.forEach(row => {
     const title = String(row.title || '').trim();
     if (title) names.add(title);
@@ -581,7 +592,8 @@ function buildApprovedActivities(roundRows) {
     map[project].add(activity);
   });
 
-  // Admin-managed activities: project-specific, or global when project_title is blank.
+  // Admin-managed projects belong to exactly one round; only that round's activities apply.
+  const managed = getManagedProjectsForRound(state.selectedRound);
   const projectNames = new Set([
     ...Object.keys(map),
     ...state.modificationProjects.map(p => p.name)
@@ -589,9 +601,9 @@ function buildApprovedActivities(roundRows) {
 
   projectNames.forEach(project => {
     if (!map[project]) map[project] = new Set();
-    state.managedActivities.forEach(row => {
-      if (!row.project || row.project.toLowerCase() === project.toLowerCase()) {
-        map[project].add(row.activity);
+    managed.forEach(row => {
+      if (row.project.toLowerCase() === project.toLowerCase()) {
+        row.activities.forEach(activity => map[project].add(activity));
       }
     });
   });
