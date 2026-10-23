@@ -671,8 +671,12 @@ begin
     and upper(round) = upper(s.round);
 
   insert into public.budget_reference
-    (institution, round, title, activity_title, object_code, budget, budget_item_description)
+    (source_key, sync_batch, institution, round, title, activity_title, object_code, budget, budget_item_description)
   select
+    'finalized:' || s.request_number || ':' || md5(
+      coalesce(sm.title, '') || '|' || coalesce(sm.activity_title, '') || '|' || coalesce(sm.object_category, '')
+    ),
+    'finalized:' || s.request_number,
     s.institution,
     upper(s.round),
     sm.title,
