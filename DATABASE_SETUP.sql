@@ -664,6 +664,9 @@ begin
     raise exception 'Only approved requests can be finalized';
   end if;
 
+  -- Lets the guard trigger below allow this function to replace finalized rows.
+  perform set_config('app.finalizing', 'on', true);
+
   -- The submitted budget replaces the whole round budget, so projects,
   -- activities and object codes may be added, removed or changed.
   delete from public.budget_reference
@@ -671,8 +674,12 @@ begin
     and upper(round) = upper(s.round);
 
   insert into public.budget_reference
-    (institution, round, title, activity_title, object_code, budget, budget_item_description)
+    (source_key, sync_batch, institution, round, title, activity_title, object_code, budget, budget_item_description)
   select
+    'finalized:' || s.request_number || ':' || md5(
+      coalesce(sm.title, '') || '|' || coalesce(sm.activity_title, '') || '|' || coalesce(sm.object_category, '')
+    ),
+    'finalized:' || s.request_number,
     s.institution,
     upper(s.round),
     sm.title,
@@ -684,6 +691,8 @@ begin
   where sm.submission_id = p_id
     and coalesce(sm.proposed_budget, 0) > 0;
 
+  perform set_config('app.finalizing', 'off', true);
+
   update public.budget_submissions
   set status = 'Finalized', finalized_at = now(), updated_at = now()
   where id = p_id;
@@ -692,3 +701,77 @@ $$;
 
 revoke all on function public.admin_finalize_submission(uuid) from public;
 grant execute on function public.admin_finalize_submission(uuid) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Guard finalized budgets against the external import into budget_reference.
+-- Rows written by admin_finalize_submission have sync_batch 'finalized:...'.
+--  * Imported rows for an institution + round that has finalized rows are skipped.
+--  * Finalized rows cannot be updated or deleted except by admin_finalize_submission.
+--  * TRUNCATE is refused while finalized rows exist.
+-- Imported rows without a round also get round filled in from the title.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.guard_budget_reference_write()
+returns trigger
+language plpgsql
+as $$
+declare
+  v_round text;
+begin
+  if tg_op = 'INSERT' then
+    v_round := upper(coalesce(
+      nullif(new.round, ''),
+      'R' || ((regexp_match(new.title, '\mR\s*(\d+)\M', 'i'))[1])::int
+    ));
+
+    if new.round is null then
+      new.round := v_round;
+    end if;
+
+    if new.sync_batch not like 'finalized:%'
+       and v_round is not null
+       and exists (
+         select 1 from public.budget_reference b
+         where b.sync_batch like 'finalized:%'
+           and lower(b.institution) = lower(new.institution)
+           and upper(b.round) = v_round
+       ) then
+      return null;
+    end if;
+
+    return new;
+  end if;
+
+  if old.sync_batch like 'finalized:%'
+     and coalesce(current_setting('app.finalizing', true), '') <> 'on' then
+    return null;
+  end if;
+
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_guard_budget_reference_write on public.budget_reference;
+create trigger trg_guard_budget_reference_write
+before insert or update or delete on public.budget_reference
+for each row execute function public.guard_budget_reference_write();
+
+create or replace function public.guard_budget_reference_truncate()
+returns trigger
+language plpgsql
+as $$
+begin
+  if exists (select 1 from public.budget_reference where sync_batch like 'finalized:%') then
+    raise exception 'budget_reference contains finalized budgets; delete non-finalized rows instead of truncating';
+  end if;
+  return null;
+end;
+$$;
+
+drop trigger if exists trg_guard_budget_reference_truncate on public.budget_reference;
+create trigger trg_guard_budget_reference_truncate
+before truncate on public.budget_reference
+for each statement execute function public.guard_budget_reference_truncate();
