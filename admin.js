@@ -624,21 +624,16 @@ async function finalizeRequest() {
   }
 
   if (!window.confirm(
-    'Finalize this request? Confirm you have updated the budget in the external system. The requester will be emailed and can then start a new request.'
+    'Finalize this request? The submitted budget will replace the current budget for this institution and round (projects, activities and object codes included). The requester will be emailed and can then start a new request.'
   )) return;
 
   try {
     showLoading(true);
     clearMessage();
 
-    const { error } = await supabaseClient
-      .from('budget_submissions')
-      .update({
-        status: 'Finalized',
-        finalized_at: new Date().toISOString()
-      })
-      .eq('id', request.id)
-      .eq('status', 'Approved');
+    const { error } = await supabaseClient.rpc('admin_finalize_submission', {
+      p_id: request.id
+    });
 
     if (error) throw error;
 

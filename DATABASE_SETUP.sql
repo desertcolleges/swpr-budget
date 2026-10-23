@@ -622,3 +622,73 @@ $$;
 
 revoke all on function public.get_round_history(text, text) from public;
 grant execute on function public.get_round_history(text, text) to anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Finalize applies the approved request as the new budget for that
+-- institution + round. Prior values stay in submission_modifications
+-- (current_budget vs proposed_budget) and submission_revisions.
+-- ---------------------------------------------------------------------------
+
+alter table public.budget_reference
+  add column if not exists round text;
+
+-- Backfill round from the title (e.g. "... R10 ...") for existing rows.
+update public.budget_reference
+set round = 'R' || ((regexp_match(title, '\mR\s*(\d+)\M', 'i'))[1])::int
+where round is null
+  and title ~* '\mR\s*\d+\M';
+
+create index if not exists idx_budget_reference_institution_round
+  on public.budget_reference (institution, round);
+
+create or replace function public.admin_finalize_submission(p_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  s public.budget_submissions%rowtype;
+begin
+  if not exists (select 1 from public.admin_users a where a.user_id = auth.uid() and a.active = true) then
+    raise exception 'Not authorized';
+  end if;
+
+  select * into s from public.budget_submissions where id = p_id for update;
+
+  if not found then
+    raise exception 'Request not found';
+  end if;
+
+  if s.status <> 'Approved' then
+    raise exception 'Only approved requests can be finalized';
+  end if;
+
+  -- The submitted budget replaces the whole round budget, so projects,
+  -- activities and object codes may be added, removed or changed.
+  delete from public.budget_reference
+  where lower(institution) = lower(s.institution)
+    and upper(round) = upper(s.round);
+
+  insert into public.budget_reference
+    (institution, round, title, activity_title, object_code, budget, budget_item_description)
+  select
+    s.institution,
+    upper(s.round),
+    sm.title,
+    sm.activity_title,
+    coalesce(nullif(trim(sm.object_code), ''), left(sm.object_category, 1) || '000'),
+    coalesce(sm.proposed_budget, 0),
+    coalesce(sm.proposed_budget_description, '')
+  from public.submission_modifications sm
+  where sm.submission_id = p_id
+    and coalesce(sm.proposed_budget, 0) > 0;
+
+  update public.budget_submissions
+  set status = 'Finalized', finalized_at = now(), updated_at = now()
+  where id = p_id;
+end;
+$$;
+
+revoke all on function public.admin_finalize_submission(uuid) from public;
+grant execute on function public.admin_finalize_submission(uuid) to authenticated;
