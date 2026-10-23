@@ -59,6 +59,14 @@
           </div>
         </div>
 
+        <div id="openRequestNotice" class="history-notice hidden"></div>
+
+        <div id="roundTabs" class="tabs" role="tablist" aria-label="Round views">
+          <button type="button" class="tab-button active" data-round-tab="budget">Current Budget</button>
+          <button type="button" class="tab-button" data-round-tab="history">Modification History</button>
+        </div>
+
+        <div id="budgetPanel">
         <div class="summary-grid">
           <div class="summary-card">
             <span>Current Round Total</span>
@@ -75,6 +83,12 @@
         </div>
 
         <div id="budgetResults"></div>
+        </div>
+
+        <div id="historyPanel" class="hidden">
+          <div id="historyList"></div>
+          <div id="historyDetail" class="hidden"></div>
+        </div>
       </section>
 
       <section id="modificationSection" class="hidden">
@@ -147,6 +161,7 @@
     </main>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
+    <script src="shared.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

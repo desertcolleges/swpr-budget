@@ -95,6 +95,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     .addEventListener('click', () => processRequest('Rejected'));
 
   document
+    .getElementById('finalizeButton')
+    .addEventListener('click', finalizeRequest);
+
+  document
+    .getElementById('deleteButton')
+    .addEventListener('click', deleteRequest);
+
+  document
     .getElementById('roundSettingsForm')
     .addEventListener('submit', saveRoundSettings);
 
@@ -235,7 +243,9 @@ async function loadRequests() {
         status,
         admin_notes,
         created_at,
-        reviewed_at
+        reviewed_at,
+        revision_no,
+        finalized_at
       `)
       .order('created_at', {
         ascending: false
@@ -417,6 +427,11 @@ function renderRequestDetail() {
       ${formatDate(request.created_at)}
     </p>
 
+    <p>
+      <strong>Revision:</strong>
+      ${escapeHtml(request.revision_no || 1)}
+    </p>
+
     <hr />
 
     <p>
@@ -438,64 +453,16 @@ function renderRequestDetail() {
   document
     .getElementById('reviewActions')
     .classList.toggle('hidden', !isPending);
+
+  document
+    .getElementById('finalizeActions')
+    .classList.toggle('hidden', request.status !== 'Approved');
 }
 
 function renderModificationDetails() {
   const request = state.selectedRequest;
-  const container =
-    document.getElementById('modificationDetails');
-
-  if (!request.modifications.length) {
-    container.innerHTML =
-      '<p class="card">No modifications were found.</p>';
-    return;
-  }
-
-  let html = `
-    <table>
-      <thead>
-        <tr>
-          <th>Round</th>
-          <th>Project</th>
-          <th>Activity</th>
-          <th>Object Category</th>
-          <th>Object Code</th>
-          <th>Current Description</th>
-          <th>Proposed Description</th>
-          <th>Current Budget</th>
-          <th>Proposed Budget</th>
-          <th>Flags</th>
-        </tr>
-      </thead>
-      <tbody>
-  `;
-
-  request.modifications.forEach(row => {
-    const isNew = Boolean(row.is_new_line);
-    const objectCategory = row.object_category || inferObjectCategory(row.object_code);
-    const currentDescription = row.current_budget_description || row.budget_item_description || '';
-    const proposedDescription = row.proposed_budget_description || row.proposed_description || '';
-
-    html += `
-      <tr class="${isNew ? 'changed-row' : ''}">
-        <td>${escapeHtml(row.round || request.round || '')}</td>
-        <td>${escapeHtml(row.title)}</td>
-        <td>${escapeHtml(row.activity_title)}</td>
-        <td>${escapeHtml(objectCategory)}</td>
-        <td>${escapeHtml(row.object_code)}</td>
-        <td>${escapeHtml(currentDescription)}</td>
-        <td>${escapeHtml(proposedDescription)}</td>
-        <td class="money">${formatCurrency(row.current_budget)}</td>
-        <td class="money">${formatCurrency(row.proposed_budget)}</td>
-        <td>
-          ${isNew ? '<span class="flag flag-new">New Activity</span>' : '<span class="flag">Existing Activity</span>'}
-        </td>
-      </tr>
-    `;
-  });
-
-  html += '</tbody></table>';
-  container.innerHTML = html;
+  document.getElementById('modificationDetails').innerHTML =
+    window.ModRender.render(request.modifications);
 }
 
 async function processRequest(action) {
@@ -550,25 +517,112 @@ async function processRequest(action) {
       request.status_access_token
     );
 
+    // Reload first: loadRequests clears the message area.
+    await loadRequests();
+    showRequestList();
+
     if (notificationResult.warning) {
       showMessage(
-        `Request marked as ${action}. Warning: ${notificationResult.warning}`,
+        `Request marked as ${action}, but the notification email was NOT sent: ${notificationResult.warning}`,
         'error'
       );
     } else {
       showMessage(
-        `Request marked as ${action}.`,
+        `Request marked as ${action}. Notification email sent to ${request.requester_email}.`,
         'success'
       );
     }
-
-    await loadRequests();
-    showRequestList();
   } catch (error) {
     showMessage(
       'Unable to process request: ' + error.message,
       'error'
     );
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function finalizeRequest() {
+  const request = state.selectedRequest;
+
+  if (!request || request.status !== 'Approved') {
+    showMessage('Only approved requests can be finalized.', 'error');
+    return;
+  }
+
+  if (!window.confirm(
+    'Finalize this request? Confirm you have updated the budget in the external system. The requester will be emailed and can then start a new request.'
+  )) return;
+
+  try {
+    showLoading(true);
+    clearMessage();
+
+    const { error } = await supabaseClient
+      .from('budget_submissions')
+      .update({
+        status: 'Finalized',
+        finalized_at: new Date().toISOString()
+      })
+      .eq('id', request.id)
+      .eq('status', 'Approved');
+
+    if (error) throw error;
+
+    const notificationResult = await notifyRequester(
+      request.requester_email,
+      request.request_number,
+      'Finalized',
+      '',
+      request.status_access_token
+    );
+
+    await loadRequests();
+    showRequestList();
+
+    if (notificationResult.warning) {
+      showMessage(
+        `Request finalized, but the notification email was NOT sent: ${notificationResult.warning}`,
+        'error'
+      );
+    } else {
+      showMessage('Request finalized and requester notified.', 'success');
+    }
+  } catch (error) {
+    showMessage('Unable to finalize request: ' + error.message, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function deleteRequest() {
+  const request = state.selectedRequest;
+  if (!request) return;
+
+  const typed = window.prompt(
+    `This permanently deletes ${request.request_number} and its history. Type the request number to confirm.`
+  );
+
+  if (!typed || typed.trim().toUpperCase() !== String(request.request_number).toUpperCase()) {
+    if (typed !== null) showMessage('Request number did not match; nothing was deleted.', 'error');
+    return;
+  }
+
+  try {
+    showLoading(true);
+    clearMessage();
+
+    const { error } = await supabaseClient.rpc('admin_delete_submission', {
+      p_id: request.id
+    });
+
+    if (error) throw error;
+
+    await loadRequests();
+    showRequestList();
+    showMessage(`Request ${request.request_number} was deleted.`, 'success');
+  } catch (error) {
+    showMessage('Unable to delete request: ' + error.message, 'error');
   } finally {
     showLoading(false);
   }
@@ -601,13 +655,13 @@ async function notifyRequester(
       }
     );
 
-    const result = await response.json();
+    const result = await response.json().catch(() => ({}));
 
     if (!response.ok) {
       return {
         warning:
           result.error ||
-          'Notification email was not sent.'
+          `Email service returned HTTP ${response.status}.`
       };
     }
 
@@ -615,8 +669,9 @@ async function notifyRequester(
   } catch (error) {
     return {
       warning:
-        error.message ||
-        'Notification email request failed.'
+        (error.message ||
+        'Notification email request failed.') +
+        ' (Check that the send-approval edge function is deployed and allows the apikey header.)'
     };
   }
 }

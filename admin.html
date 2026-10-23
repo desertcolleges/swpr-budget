@@ -150,6 +150,7 @@
             <option value="Pending">Pending</option>
             <option value="Approved">Approved</option>
             <option value="Rejected">Rejected</option>
+            <option value="Finalized">Finalized</option>
           </select>
         </div>
 
@@ -189,7 +190,7 @@
         </div>
 
         <div id="requestMetadata" class="card"></div>
-        <div id="modificationDetails" class="table-wrapper"></div>
+        <div id="modificationDetails"></div>
 
         <div id="reviewActions" class="card">
           <h3>Review Decision</h3>
@@ -200,6 +201,17 @@
             <button id="rejectButton" class="button danger" type="button">Reject Request</button>
           </div>
         </div>
+
+        <div id="finalizeActions" class="card hidden">
+          <h3>Finalize</h3>
+          <p>Mark as Finalized once you have updated the budget in the external system. The requester will be notified and may then start a new request.</p>
+          <button id="finalizeButton" class="button success" type="button">Mark as Finalized</button>
+        </div>
+
+        <div class="card">
+          <h3>Danger Zone</h3>
+          <button id="deleteButton" class="button danger" type="button">Delete Request</button>
+        </div>
       </section>
 
       <div id="loadingOverlay" class="loading-overlay hidden">
@@ -209,6 +221,7 @@
     </main>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
+    <script src="shared.js"></script>
     <script src="admin.js"></script>
   </body>
 </html>

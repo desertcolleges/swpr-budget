@@ -12,22 +12,24 @@ function escapeHtml(value: unknown): string {
     .replaceAll("'", "&#039;");
 }
 
+// The admin page sends an apikey header; it must be allowed in the preflight,
+// and CORS headers must be on every response or the browser blocks the reply.
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, apikey, x-client-info"
+};
+const jsonHeaders = { "Content-Type": "application/json", ...corsHeaders };
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, {
-      status: 200,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization"
-      }
-    });
+    return new Response(null, { status: 200, headers: corsHeaders });
   }
 
   if (req.method !== "POST") {
     return new Response(
       JSON.stringify({ error: "Method not allowed" }),
-      { status: 405, headers: { "Content-Type": "application/json" } }
+      { status: 405, headers: jsonHeaders }
     );
   }
 
@@ -38,11 +40,12 @@ serve(async (req) => {
     if (!requester_email || !request_number || !action) {
       return new Response(
         JSON.stringify({ error: "Missing required fields" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
+        { status: 400, headers: jsonHeaders }
       );
     }
 
     if (!resendApiKey) {
+      console.error("RESEND_API_KEY is not configured");
       throw new Error("RESEND_API_KEY is not configured");
     }
 
@@ -50,14 +53,30 @@ serve(async (req) => {
       ? `&token=${encodeURIComponent(status_token)}`
       : "";
     const statusLink = `${appBaseUrl}/status.html?requestId=${encodeURIComponent(request_number)}${tokenQuery}`;
+    if (!["Approved", "Rejected", "Finalized"].includes(action)) {
+      return new Response(
+        JSON.stringify({ error: "Unsupported action" }),
+        { status: 400, headers: jsonHeaders }
+      );
+    }
+
     const subject = action === "Approved"
       ? `Your request ${request_number} has been approved`
-      : `Your request ${request_number} has been rejected`;
+      : action === "Finalized"
+        ? `Your request ${request_number} has been finalized`
+        : `Your request ${request_number} has been rejected`;
 
     const escapedRequest = escapeHtml(request_number);
     const escapedNotes = escapeHtml(notes || "No rejection reason provided.");
 
-    const htmlBody = action === "Approved"
+    const htmlBody = action === "Finalized"
+      ? `
+        <h2>Request Finalized</h2>
+        <p>Your request <strong>${escapedRequest}</strong> has been finalized and your budget has been updated.</p>
+        <p><a href="${statusLink}">View Request Status Record</a></p>
+        <p>If you need further changes, you may now submit a new modification request.</p>
+      `
+      : action === "Approved"
       ? `
         <h2>Request Approved</h2>
         <p>Your request <strong>${escapedRequest}</strong> has been approved.</p>
@@ -69,7 +88,7 @@ serve(async (req) => {
         <p>Your request <strong>${escapedRequest}</strong> has been rejected.</p>
         <p><strong>Reason:</strong> ${escapedNotes}</p>
         <p><a href="${statusLink}">View Request Status Record</a></p>
-        <p>This notification does not include a PDF attachment; use the portal print dialog to save a PDF.</p>
+        <p>You can edit and resubmit this request from the requester form.</p>
       `;
 
     const resendResponse = await fetch("https://api.resend.com/emails", {
@@ -89,20 +108,21 @@ serve(async (req) => {
     const result = await resendResponse.json();
 
     if (!resendResponse.ok) {
+      console.error("Resend error:", resendResponse.status, JSON.stringify(result));
       return new Response(
         JSON.stringify({ error: result.message || "Failed to send email" }),
-        { status: resendResponse.status, headers: { "Content-Type": "application/json" } }
+        { status: resendResponse.status, headers: jsonHeaders }
       );
     }
 
     return new Response(
       JSON.stringify({ success: true, messageId: result.id }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
+      { status: 200, headers: jsonHeaders }
     );
   } catch (error) {
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
+      { status: 500, headers: jsonHeaders }
     );
   }
 });
