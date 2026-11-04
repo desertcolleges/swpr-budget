@@ -1,0 +1,12 @@
+[functions.budget-draft]
+verify_jwt = false
+
+[functions.sync-expenditures]
+verify_jwt = false
+
+[functions.submit-budget]
+verify_jwt = false
+entrypoint = "../SUBMIT_BUDGET_EDGE_FUNCTION.ts"
+
+[functions.send-approval]
+entrypoint = "../SEND_APPROVAL_EDGE_FUNCTION.ts"

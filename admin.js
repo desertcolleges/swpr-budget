@@ -194,7 +194,7 @@ async function signInWithGoogle() {
 }
 
 function setActiveTab(tab) {
-  const valid = ['admins', 'allocations', 'institutions', 'projects', 'requests', 'rounds'];
+  const valid = ['admins', 'allocations', 'budgets', 'expenditures', 'institutions', 'projects', 'requests', 'rounds'];
   state.activeTab = valid.includes(tab) ? tab : 'requests';
 
   document.querySelectorAll('#adminTabs .tab-button').forEach(button => {
@@ -234,6 +234,8 @@ async function showAdminDashboard(session) {
     loadProjects(),
     loadAdmins()
   ]);
+  populateAdminBudgetSelectors();
+  await loadExpenditureSyncStatus();
 }
 
 async function loadRequests() {

@@ -49,6 +49,8 @@
         <nav id="adminTabs" class="tabs" role="tablist" aria-label="Admin sections">
           <button class="tab-button" role="tab" data-tab="admins" type="button">Admins</button>
           <button class="tab-button" role="tab" data-tab="allocations" type="button">Allocations</button>
+          <button class="tab-button" role="tab" data-tab="budgets" type="button">Budgets</button>
+          <button class="tab-button" role="tab" data-tab="expenditures" type="button">Expenditures</button>
           <button class="tab-button" role="tab" data-tab="institutions" type="button">Institutions</button>
           <button class="tab-button" role="tab" data-tab="projects" type="button">Projects</button>
           <button class="tab-button" role="tab" data-tab="requests" type="button">Requests</button>
@@ -95,6 +97,51 @@
           <div id="allocationRoundTabs" class="tabs sub-tabs" role="tablist" aria-label="Allocation rounds"></div>
           <div id="allocationList" class="table-wrapper"></div>
         </div>
+        </div>
+
+        <div class="tab-panel hidden" id="tab-budgets">
+          <div class="card">
+            <h3>Edit Current Budgets</h3>
+            <p>Admin changes apply immediately. The allocation is informational, not a limit. A reason and confirmation are required.</p>
+            <form id="adminBudgetLoadForm" class="activity-controls">
+              <div><label for="adminBudgetInstitution">College</label><select id="adminBudgetInstitution" required></select></div>
+              <div><label for="adminBudgetRound">Round</label><select id="adminBudgetRound" required></select></div>
+              <button class="button secondary" type="submit">Load Budget</button>
+            </form>
+          </div>
+          <section id="adminBudgetSection" class="hidden">
+            <h3 id="adminBudgetHeading"></h3>
+            <div id="adminBudgetCurrent"></div>
+            <div id="adminBudgetSummary" class="summary-grid"></div>
+            <div id="adminBudgetEditor" class="budget-editor"></div>
+            <div class="card">
+              <div class="activity-controls">
+                <div><label for="adminBudgetProject">Project</label><input id="adminBudgetProject" list="adminBudgetProjectOptions" /><datalist id="adminBudgetProjectOptions"></datalist></div>
+                <div><label for="adminBudgetActivity">Activity</label><input id="adminBudgetActivity" list="adminBudgetActivityOptions" /><datalist id="adminBudgetActivityOptions"></datalist></div>
+                <button id="adminBudgetAddActivity" class="button secondary" type="button">Add Activity</button>
+              </div>
+              <form id="adminBudgetSaveForm">
+                <label for="adminBudgetReason">Reason for change</label>
+                <textarea id="adminBudgetReason" rows="2" required></textarea>
+                <p id="adminBudgetDirtyStatus" class="hint" role="status"></p>
+                <button id="adminBudgetSaveButton" class="button success" type="submit">Apply Budget Changes</button>
+              </form>
+            </div>
+            <h3>Admin Change History</h3>
+            <div id="adminBudgetHistory"></div>
+          </section>
+        </div>
+
+        <div class="tab-panel hidden" id="tab-expenditures">
+          <div class="card">
+            <h3>Google Sheet Expenditure Sync</h3>
+            <p>Imports cumulative totals by college, round, project, and object category. Expenditures are never assigned to individual activities. Backend configuration is required.</p>
+            <p id="adminSyncStatus" role="status"></p>
+            <div class="button-row">
+              <button id="syncExpendituresButton" class="button primary" type="button">Sync Now</button>
+              <button id="refreshSyncStatusButton" class="button secondary" type="button">Refresh Status</button>
+            </div>
+          </div>
         </div>
 
         <div class="tab-panel hidden" id="tab-institutions">
@@ -233,5 +280,6 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
     <script src="shared.js"></script>
     <script src="admin.js"></script>
+    <script src="admin-budgets.js"></script>
   </body>
 </html>

@@ -69,6 +69,7 @@
         </div>
 
         <div id="budgetPanel">
+        <p id="expenditureFreshness" class="hint" role="status"></p>
         <div class="summary-grid">
           <div class="summary-card">
             <span>Current Round Total</span>
@@ -100,6 +101,7 @@
             <p id="modificationSubheading">The final proposed total must equal the allocation for this round.</p>
           </div>
           <div class="button-row">
+            <button id="saveDraftButton" class="button secondary" type="button">Save Draft</button>
             <button id="cancelModificationButton" class="button secondary">Cancel</button>
           </div>
         </div>
@@ -119,7 +121,15 @@
           </div>
         </div>
 
-        <div id="modificationRows"></div>
+        <div class="no-print">
+          <p id="draftSaveStatus" class="hint" role="status" aria-live="polite"></p>
+          <a id="resumeDraftLink" class="hidden" rel="noreferrer">Continue this saved draft</a>
+          <div id="draftBaselineWarning" class="alert alert-error hidden">
+            The current budget has changed since this modification was prepared.
+            <button id="reviewCurrentBudgetButton" class="button secondary" type="button">Review against current budget</button>
+          </div>
+        </div>
+        <div id="modificationRows" class="budget-editor"></div>
 
         <div id="newProjectControls" class="card hidden">
           <label for="newProjectName">Add Project</label>
@@ -156,6 +166,21 @@
         </form>
       </section>
 
+      <dialog id="draftContactDialog">
+        <form id="draftContactForm">
+          <h3>Save your modification</h3>
+          <p>Your draft is not submitted for approval. We will email a private link to continue.</p>
+          <label for="draftName">Your Name</label>
+          <input id="draftName" autocomplete="name" required />
+          <label for="draftEmail">Email Address</label>
+          <input id="draftEmail" type="email" autocomplete="email" required />
+          <div class="button-row">
+            <button class="button success" type="submit">Save and Email Link</button>
+            <button id="closeDraftDialogButton" class="button secondary" type="button">Cancel</button>
+          </div>
+        </form>
+      </dialog>
+
       <div id="loadingOverlay" class="loading-overlay hidden">
         <div class="spinner"></div>
         <span>Loading...</span>
@@ -165,5 +190,6 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
     <script src="shared.js"></script>
     <script src="app.js"></script>
+    <script src="drafts.js"></script>
   </body>
 </html>
